@@ -50,7 +50,7 @@ SELECT * FROM user_balance WHERE id = 'B' FOR UPDATE;
 COMMIT;
 ```
 
-
+该顺序必须全局唯一，不能在同一张表中，一下用A列，一下用B列
 
 
 
