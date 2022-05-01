@@ -1,0 +1,2 @@
+kubeadm join 192.168.0.30:6443 --token gasjod.99h0nq573oj3wyop \
+        --discovery-token-ca-cert-hash sha256:62eba9bb1264df0c60498a9ba4a16126a82a278596bb158f956fb67dd5f028f8

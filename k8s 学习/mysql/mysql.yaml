@@ -1,0 +1,98 @@
+# apiVersion: v1
+# kind: Namespace
+# metadata:
+#         name: mysql
+
+# ---
+
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    k8s-app: mysql
+  name: mysql
+  namespace: kube-system
+spec:
+  ports:
+    - port: 3306
+      targetPort: 3306
+  selector:
+    k8s-app: mysql
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    k8s-app: mysql
+  name: mysql
+  namespace: kube-system
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      k8s-app: mysql
+      version: v01
+  template:
+    metadata:
+      labels:
+        k8s-app: mysql
+        version: v01
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:5.7.36
+          ports:
+            - containerPort: 3306
+              protocol: TCP
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "1929564872"
+          volumeMounts:
+            - name: mysql-data-volume
+              mountPath: /opt/mysql/data
+            - name: mysql-log-volume
+              mountPath: /opt/mysql/logs
+            - name: mysql-config-volume
+              mountPath: /etc/mysql/conf.d/
+          resources:
+            limits:
+              cpu: "4"
+              memory: 2Gi
+          livenessProbe:
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+            exec:
+              command: ["mysqladmin", "-uroot", "-p${MYSQL_ROOT_PASSWORD}", "ping"]
+          readinessProbe:  
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+            exec:
+              command: ["mysqladmin", "-uroot", "-p${MYSQL_ROOT_PASSWORD}", "ping"]
+      volumes:
+        - name: mysql-data-volume
+          hostPath:
+            path: /opt/mysql/data
+            type: Directory
+        - name: mysql-log-volume
+          hostPath:
+            path: /opt/mysql/logs
+            type: Directory
+        - name: mysql-config-volume
+          hostPath:
+            path: /opt/mysql/conf
+            type: Directory
+      nodeSelector:
+        "nodeconfig": "6c16g"
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
+
