@@ -13,29 +13,69 @@
 7. 单节点，设置master节点也可以运行Pod（默认策略是master节点不运行）
 8. 部署其他插件
 
+### docker 安装
 
-
-### swap 配置
-
-禁用虚拟内存
+安装
 
 ```shell
-sudo vi /etc/fstab
+sudo apt-get update
+
+sudo apt-get install \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release
 ```
 
-注释相关代码 `swap`开头
+添加GPG
 
 ```shell
-sudo reboot
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 ```
 
-重启后查看是否置为0
+
 
 ```shell
-sudo free -m 
+ echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 ```
 
-### docker启动配置修改
+
+
+安装Docker 引擎
+
+```shell
+sudo apt-get update
+sudo apt-get install docker-ce docker-ce-cli containerd.io
+```
+
+
+
+docker启动配置修改 1
+
+```shell
+sudo vim /etc/docker/daemon.json
+```
+
+```json
+{
+        "exec-opts": ["native.cgroupdriver=systemd"],
+        "registry-mirrors":[
+                "https://f5r2myhq.mirror.aliyuncs.com"
+        ]
+}
+```
+
+```shell
+sudo systemctl daemon-reload
+sudo systemctl restart docker 
+```
+
+配置方法2
+
+````markdown
+#### docker启动配置修改 2
 
 修改docker启动命令
 
@@ -81,6 +121,87 @@ Restart=always
 systemctl daemon-reload
 systemctl restart docker
 ```
+
+#### 
+````
+
+权限组
+
+1. 找到docker的用户组，或创建用户组
+
+```shell
+sudo groupadd docker
+```
+
+2. 将用户加入该group
+
+```shell
+sudo usermod -aG docker $USER
+```
+
+3. 重启服务
+
+```shell
+sudo service docker restart
+```
+
+
+
+### k8s安装
+
+基础依赖
+
+```shell
+sudo apt-get update && sudo apt-get install -y ca-certificates curl software-properties-common apt-transport-https curl
+```
+
+添加软件包
+
+```shell
+curl -s https://mirrors.aliyun.com/kubernetes/apt/doc/apt-key.gpg | sudo apt-key add -
+```
+
+添加源
+
+```shell
+sudo tee /etc/apt/sources.list.d/kubernetes.list <<EOF 
+deb https://mirrors.aliyun.com/kubernetes/apt/ kubernetes-xenial main
+EOF
+```
+
+更新包
+
+```shell
+sudo apt update
+```
+
+安装
+
+```shell
+sudo apt install -y kubelet kubeadm kubectl
+```
+
+### swap 配置
+
+禁用虚拟内存
+
+```shell
+sudo vi /etc/fstab
+```
+
+注释相关代码 `swap`开头
+
+```shell
+sudo reboot
+```
+
+重启后查看是否置为0
+
+```shell
+sudo free -m 
+```
+
+
 
 ### 获取镜像列表 同时安装
 

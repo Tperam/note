@@ -1,0 +1,78 @@
+# apiVersion: v1
+# kind: Namespace
+# metadata:
+#         name: mysql
+
+# ---
+
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    k8s-app: redis
+  name: redis
+  namespace: kube-system
+spec:
+  type: NodePort
+  ports:
+    - port: 6379
+      targetPort: 6379
+      nodePort: 30000
+  selector:
+    k8s-app: redis
+
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    k8s-app: redis
+  name: redis
+  namespace: kube-system
+spec:
+  serviceName: "redis"
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      k8s-app: redis
+      version: v01
+  template:
+    metadata:
+      labels:
+        k8s-app: redis
+        version: v01
+    spec:
+      containers:
+        - name: redis
+          image: redis:2.8
+          ports:
+            - containerPort: 6379
+              protocol: TCP
+          lifecycle:
+            postStart:
+              exec:
+                command: [ "/bin/sh", "-c", "redis-cli config set requirepass Kjgnj93JKj3je" ]
+          resources:
+            limits:
+              cpu: "4"
+              memory: 2Gi
+          # livenessProbe:
+          #   initialDelaySeconds: 30
+          #   periodSeconds: 10
+          #   timeoutSeconds: 5
+          #   successThreshold: 1
+          #   failureThreshold: 3
+          #   exec:
+          #     command: ["redis-cli", "-uroot", "-p${MYSQL_ROOT_PASSWORD}", "ping"]
+          # readinessProbe:  
+          #   initialDelaySeconds: 10
+          #   periodSeconds: 10
+          #   timeoutSeconds: 5
+          #   successThreshold: 1
+          #   failureThreshold: 3
+          #   exec:
+          #     command: ["redis-cli", "-uroot", "-p${MYSQL_ROOT_PASSWORD}", "ping"]
+
+

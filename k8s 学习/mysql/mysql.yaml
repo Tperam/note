@@ -13,9 +13,11 @@ metadata:
   name: mysql
   namespace: kube-system
 spec:
+  type: NodePort
   ports:
     - port: 3306
       targetPort: 3306
+      nodePort: 30306
   selector:
     k8s-app: mysql
 
@@ -55,8 +57,8 @@ spec:
               mountPath: /opt/mysql/data
             - name: mysql-log-volume
               mountPath: /opt/mysql/logs
-            - name: mysql-config-volume
-              mountPath: /etc/mysql/conf.d/
+            - name: mysql-etc-config-volume
+              mountPath: /etc/mysql/
           resources:
             limits:
               cpu: "4"
@@ -68,15 +70,15 @@ spec:
             successThreshold: 1
             failureThreshold: 3
             exec:
-              command: ["mysqladmin", "-uroot", "-p${MYSQL_ROOT_PASSWORD}", "ping"]
-          readinessProbe:  
+              command: ["mysqladmin", "-uroot", "-p1929564872", "ping"]
+          readinessProbe:
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
             successThreshold: 1
             failureThreshold: 3
             exec:
-              command: ["mysqladmin", "-uroot", "-p${MYSQL_ROOT_PASSWORD}", "ping"]
+              command: ["mysqladmin", "-uroot", "-p1929564872", "ping"]
       volumes:
         - name: mysql-data-volume
           hostPath:
@@ -86,7 +88,7 @@ spec:
           hostPath:
             path: /opt/mysql/logs
             type: Directory
-        - name: mysql-config-volume
+        - name: mysql-etc-config-volume
           hostPath:
             path: /opt/mysql/conf
             type: Directory
