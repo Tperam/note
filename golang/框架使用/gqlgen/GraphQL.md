@@ -4,7 +4,7 @@
 GraphQL是什么，让我猜一猜，这是不是一个类似SQL的东西？SQL 意味着 Structure Query Language。那GraphQL是不是就是GraphQL Query Language？
 
 为什么要学习GraphQL？这是一种较新的概念，因框架gqlgen配合了其概念，而且对于其具体设计，相比于rest风格API，其所需字段，查询内容更加的清晰明了。（也更是因于此，查询时可能需要附带更多的逻辑，这也是额外的负担。）
-[[golang/框架使用/gqlgen/README]] 
+[[gqlgen]] 
 
 ### 类型系统
 
