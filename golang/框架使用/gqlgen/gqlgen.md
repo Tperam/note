@@ -1,4 +1,5 @@
 #gqlgen
+[文档](https://gqlgen.com)
 
 当前为 gqlgen 的学习笔记
 
