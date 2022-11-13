@@ -1,6 +1,5 @@
 # ZooKeeper
-
------
+#zookeeper
 
 ## ZooKeeper 简介
 
@@ -98,3 +97,5 @@ ZooKeeper 中的选举方式如下
     4. 如果有服务监听当前节点，当他发现当前节点 deleted 之后，将会执行锁操作
 
   ![image-20210206160602411](image-20210206160602411.png)
+
+## 安装
