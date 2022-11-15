@@ -164,11 +164,120 @@ DMA是现代服务器所拥有（主板支持）
 - [zookeeper-3.4.6.tar.gz](https://archive.apache.org/dist/zookeeper/zookeeper-3.4.6/zookeeper-3.4.6.tar.gz)
 - [jdk-8u202-linux-64.rpm](https://download.oracle.com/otn/java/jdk/8u202-b08/1961070e4c9b4e26a04e7f5a083f551e/jdk-8u202-linux-x64.rpm) （需要登陆
 
+#### 安装
+**java安装**
+```shell
+rpm -ivh jdk-*.rpm
+```
+配置环境变量
+```shell
+echo "JAVA_HOME=/usr/java/latest" ~/.bashrc
+echo "PATH=$PATH:$JAVA_HOME/bin" ~/.bashrc
+echo "CLASSPATH=." ~/.bashrc
+echo "export JAVA_HOME" ~/.bashrc
+echo "export PATH" ~/.bashrc
+echo "export CLASSPATH" ~/.bashrc
+source ~/.bashrc
+```
+**配置主机名**
+```shell
+vim /etc/sysconfig/network
+```
+```shell
+NETWORKING=yes
+HOSTNAME=localhost.localdomain
+```
+**配置IP**
+```shell
+vim /etc/hosts
+```
+**关闭防火墙**
+```shell
+service iptables stop
+chkconfig iptables off
+```
+**安装zookeeper**
+```shell
+tar -xzvf zookeeper-3.4.6.tar.gz -C /usr/
+```
+进入配置目录
+```shell
+cd /usr/zookeeper-3.4.6/conf/
+```
+复制配置（默认以zoo.cfg文件启动
+可编辑修改zoo.cfg配置。（此处只搭建环境不多涉及。
+```shell
+cp zoo_sample.cfg zoo.cfg
+```
+启动zookeeper
+```shell
+/usr/zookeeper-3.4.6/bin/zkServer.sh start
+```
+可通过jps查看zookeeper启动信息
+```shell
+# jps
+448 QuorumPeerMain
+477 Jps
+```
+也可以通过 zookeeper提供的脚本查看
+```shell
+/usr/zookeeper-3.4.6/bin/zkServer.sh status
+```
 
+**安装Kafka**
+```shell
+tar -zxvf kafka_2.11-2.2.0.tgz -C /usr/
+```
+ 其解压后的bin目录下就是启动kafka的一些脚本
+```shell
+ls /usr/kafka_2.11-2.2.0/bin
+```
+```shell
+[root@9ce9835eceda kafka_2.11-2.2.0]# ls /usr/kafka_2.11-2.2.0/bin
+connect-distributed.sh               kafka-reassign-partitions.sh
+connect-standalone.sh                kafka-replica-verification.sh
+kafka-acls.sh                        kafka-run-class.sh
+kafka-broker-api-versions.sh         kafka-server-start.sh
+kafka-configs.sh                     kafka-server-stop.sh
+kafka-console-consumer.sh            kafka-streams-application-reset.sh
+kafka-console-producer.sh            kafka-topics.sh
+kafka-consumer-groups.sh             kafka-verifiable-consumer.sh
+kafka-consumer-perf-test.sh          kafka-verifiable-producer.sh
+kafka-delegation-tokens.sh           trogdor.sh
+kafka-delete-records.sh              windows
+kafka-dump-log.sh                    zookeeper-security-migration.sh
+kafka-log-dirs.sh                    zookeeper-server-start.sh
+kafka-mirror-maker.sh                zookeeper-server-stop.sh
+kafka-preferred-replica-election.sh  zookeeper-shell.sh
+kafka-producer-perf-test.sh
+```
+安装完成，我们开始单机配置
 
 
 ### 单机配置
+配置文件主要存放在`/usr/kafka_2.11-2.2.0/config`下。
+其主要包含kafka的一些参数。如果我们要配置一个kafka服务，则需要配置`server.properties`
 
+简单配置以下内容：
+`server.properties`
+```
+broker.id=0  # kafka节点的唯一标识
+listeners=PLAINTEXT://kafka_test:9092  # kafka的链接地址，kafka_test为之前配置的主机id
+log.dirs=/tmp/kafka-logs  # 实际上此为broker节点存储数据的位置
+zookeeper.connect=kafka_test:2181  # zookeeper的链接参数
+```
+
+启动kafka
+```
+/usr/kafka_2.11-2.2.0/bin/kafka-server-start.sh -daemon config/server.properties
+```
+此时输入jps将会看到
+```shell
+[root@9ce9835eceda kafka_2.11-2.2.0]# jps
+448 QuorumPeerMain
+836 Kafka
+921 Jps
+```
 
 ### 集群配置
 
