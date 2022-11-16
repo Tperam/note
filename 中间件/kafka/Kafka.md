@@ -78,6 +78,12 @@ Kafka只能保证同一个Partition的内部顺序。
 
 offset越小，说明进入Partition的时间越早。
 
+#### 副本因子
+每一个Topic都有两个参数
+- 分区数
+- 副本因子
+副本因子就是Topic中Partition的副本数量，这些副本分散保存在不同的Broker中。
+
 
 ### 生产者与消费者
 
@@ -164,22 +170,21 @@ DMA是现代服务器所拥有（主板支持）
 - [zookeeper-3.4.6.tar.gz](https://archive.apache.org/dist/zookeeper/zookeeper-3.4.6/zookeeper-3.4.6.tar.gz)
 - [jdk-8u202-linux-64.rpm](https://download.oracle.com/otn/java/jdk/8u202-b08/1961070e4c9b4e26a04e7f5a083f551e/jdk-8u202-linux-x64.rpm) （需要登陆
 
-#### 安装
-**java安装**
+#### java安装
 ```shell
 rpm -ivh jdk-*.rpm
 ```
 配置环境变量
 ```shell
-echo "JAVA_HOME=/usr/java/latest" ~/.bashrc
-echo "PATH=$PATH:$JAVA_HOME/bin" ~/.bashrc
-echo "CLASSPATH=." ~/.bashrc
-echo "export JAVA_HOME" ~/.bashrc
-echo "export PATH" ~/.bashrc
-echo "export CLASSPATH" ~/.bashrc
+echo "JAVA_HOME=/usr/java/latest" >> ~/.bashrc
+echo "PATH=$PATH:$JAVA_HOME/bin" >> ~/.bashrc
+echo "CLASSPATH=." >> ~/.bashrc
+echo "export JAVA_HOME" >> ~/.bashrc
+echo "export PATH" >> ~/.bashrc
+echo "export CLASSPATH" >> ~/.bashrc
 source ~/.bashrc
 ```
-**配置主机名**
+#### 配置主机名
 ```shell
 vim /etc/sysconfig/network
 ```
@@ -187,16 +192,16 @@ vim /etc/sysconfig/network
 NETWORKING=yes
 HOSTNAME=localhost.localdomain
 ```
-**配置IP**
+#### 配置IP
 ```shell
 vim /etc/hosts
 ```
-**关闭防火墙**
+#### 关闭防火墙
 ```shell
 service iptables stop
 chkconfig iptables off
 ```
-**安装zookeeper**
+#### 安装zookeeper
 ```shell
 tar -xzvf zookeeper-3.4.6.tar.gz -C /usr/
 ```
@@ -224,7 +229,7 @@ cp zoo_sample.cfg zoo.cfg
 /usr/zookeeper-3.4.6/bin/zkServer.sh status
 ```
 
-**安装Kafka**
+#### 安装Kafka
 ```shell
 tar -zxvf kafka_2.11-2.2.0.tgz -C /usr/
 ```
@@ -280,9 +285,95 @@ zookeeper.connect=kafka_test:2181  # zookeeper的链接参数
 ```
 
 ### 集群配置
+与单机配置一样，要做相同操作，由于我们使用docker，可以直接打包镜像复刻。
+[[Docker笔记#打包已有镜像]]
 
+集群需要时间同步，所以我们继续在系统上下载`ntp`
+```shell
+yum install -y ntp
+```
+同步时间
+```shell
+ntpdate ntp1.aliyun.com
+clock -w 
+```
+docker 可能会报错，可以直接映射主机的 locatime 文件[参考](https://blog.csdn.net/k417699481/article/details/109576164)
+
+#### 配置 zookeeper
+需要在所有机器上配置`conf/zoo.cfg`文件
+添加每个服务的主机名与端口号。
+```shell
+server.1=kafka1:2888:3888
+server.2=kafka2:2888:3888
+server.3=kafka3:2888:3888
+```
+并且需要在所有机器的数据目录下，创建一个 myid 文件填入id。（每个机器的id不同。）
+```shell
+echo 1 > /tmp/zookeeper/myid
+...
+```
+配置完成后，启动服务
+```shell
+/usr/zookeeper-3.4.6/bin/zkServer.sh start
+```
+通过以下命令查看状态时，可以看到
+```shell
+/usr/zookeeper-3.4.6/bin/zkServer.sh status
+```
+![[Pasted image 20221117001838.png]]
+
+
+#### 配置 Kafka
+修改 `config/properties`文件
+
+每台机器修改 
+- broker.id  （每个机器单独id）
+- listeners （指向自己
+```shell
+broker.id=0
+...
+```
+```shell
+listeners=PLAINTEXT:kafka1:9091
+...
+```
+zookeeper 链接信息统一修改
+```
+zookeeper.connect=kafka1:2181,kafka2:2181,kafka3:2181
+```
+
+至此，配置完成。
 
 ### bash 管理操作
+
+以下命令皆以kafka目录为根目录
+
+#### Topic相关命令
+帮助
+```shell
+/bin/kafka-topics.sh --help
+```
+创建一个Topic
+
+创建了一个名为`topic01`，分区数为3，副本因子为1的Topic。（因为现在是单机，如果副本因子大于可用Brocker，将会提示并报错）
+```shell
+./bin/kafka-topics.sh --bootstrap-server kafka_test:9092 --create --topic topic01 --partitions 3 --replication-factor 1
+```
+
+
+#### 发送消息
+连接到kafka服务器，并且指定Topic为`topic01`
+```shell
+./bin/kafka-console-producer.sh --broker-list kafka_test:9092 --topic topic01
+```
+
+#### 订阅服务
+连接到kafka服务器，指定Topic为`topic01`，消费组为 group1（如果不指定消费组，则默认随机生成）
+- 如果开启多个消费者，则将分摊该topic下的partition。
+- 如果开启不同的组，则实现了广播的效果。
+```shell
+./bin/kafka-console-consumer.sh --bootstrap-server kafka_test:9092 --topic topic01 --group group1
+```
 
 
 ### Topic管理

@@ -99,3 +99,32 @@ ZooKeeper 中的选举方式如下
   ![image-20210206160602411](image-20210206160602411.png)
 
 ## 安装
+需安装Java语言，依赖的具体版本需根据zookeeper版本决定，当前需求为 jdk1.8，略过安装过程。
+
+通过官网下载相应的tar.gz包
+```shell
+tar -xzvf zookeeper-3.4.6.tar.gz -C /usr/
+```
+进入配置目录
+```shell
+cd /usr/zookeeper-3.4.6/conf/
+```
+复制配置（默认以zoo.cfg文件启动
+可编辑修改zoo.cfg配置。（此处只搭建环境不多涉及。
+```shell
+cp zoo_sample.cfg zoo.cfg
+```
+启动zookeeper
+```shell
+/usr/zookeeper-3.4.6/bin/zkServer.sh start
+```
+可通过jps查看zookeeper启动信息
+```shell
+# jps
+448 QuorumPeerMain
+477 Jps
+```
+也可以通过 zookeeper提供的脚本查看
+```shell
+/usr/zookeeper-3.4.6/bin/zkServer.sh status
+```
