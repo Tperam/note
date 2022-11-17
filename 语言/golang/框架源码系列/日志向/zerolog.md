@@ -1,6 +1,6 @@
 ## 整体流程
 
-![zerolog](zerolog.assets/zerolog.png)
+![zerolog](zerolog.png)
 
 ### 初始化操作
 

@@ -342,6 +342,13 @@ zookeeper 链接信息统一修改
 zookeeper.connect=kafka1:2181,kafka2:2181,kafka3:2181
 ```
 
+启动kafka
+```shell
+/usr/kafka_2.11-2.2.0/bin/kafka-server-start.sh -daemon config/server.properties
+```
+
+由于打包镜像问题，单机配置时没有将数据清空，所以可能在其他机器上无法正常启动Kafka，首当删除数据目录后，重启即可。
+
 至此，配置完成。
 
 ### bash 管理操作
@@ -349,34 +356,91 @@ zookeeper.connect=kafka1:2181,kafka2:2181,kafka3:2181
 以下命令皆以kafka目录为根目录
 
 #### Topic相关命令
-帮助
+
+##### 帮助
 ```shell
 /bin/kafka-topics.sh --help
 ```
-创建一个Topic
 
-创建了一个名为`topic01`，分区数为3，副本因子为1的Topic。（因为现在是单机，如果副本因子大于可用Brocker，将会提示并报错）
+##### 创建一个Topic
+- 连接到 kafka_test:9092
+	- 如果为集群，则可以用逗号将每个地址隔开例如：`kafka1:9092,kafka2:9092,kafka3:9092`
+- 创建了一个名为`topic01`
+- 分区数为3
+- 副本因子为1
+	- （因为现在是单机，如果副本因子大于可用Brocker，将会提示并报错）
 ```shell
-./bin/kafka-topics.sh --bootstrap-server kafka_test:9092 --create --topic topic01 --partitions 3 --replication-factor 1
+/bin/kafka-topics.sh --bootstrap-server kafka_test:9092 --create --topic topic01 --partitions 3 --replication-factor 1
+```
+集群
+```shell
+/bin/kafka-topics.sh --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 --create --topic top01 --partitions 3 --replication-factor 2
+```
+创建之后，我们可以在kafka的数据目录（log.dirs）看到当前机器分配的副本与主导的`partition`
+
+
+
+
+##### 查看Topic列表
+```shell
+/bin/kafka-topics.sh --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 --list
 ```
 
 
-#### 发送消息
+##### 查看详情
+```shell
+/bin/kafka-topics.sh --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 --describe --topic top01
+```
+将返回这个
+```shell
+Topic:top01     PartitionCount:3        ReplicationFactor:2     Configs:segment.bytes=1073741824
+        Topic: top01    Partition: 0    Leader: 0       Replicas: 0,2   Isr: 0,2
+        Topic: top01    Partition: 1    Leader: 2       Replicas: 2,1   Isr: 2,1
+        Topic: top01    Partition: 2    Leader: 1       Replicas: 1,0   Isr: 1,0
+
+```
+
+##### 修改分区
+```shell
+/bin/kafka-topics.sh --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 --alter --topic top01 --partitions 2
+```
+partition 分区只能改大，不能缩小。
+
+##### 删除分区
+```shell
+/bin/kafka-topics.sh --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 --delete --topic top01
+```
+删除之后，我们可以在kafka的数据目录（log.dirs）中看到，原有的Topic文件变成了`$TOPIC-0-*****-delete`
+#### 生产者
+##### 发送消息
 连接到kafka服务器，并且指定Topic为`topic01`
 ```shell
-./bin/kafka-console-producer.sh --broker-list kafka_test:9092 --topic topic01
+/bin/kafka-console-producer.sh --broker-list kafka_test:9092 --topic topic01
 ```
 
-#### 订阅服务
+#### 消费者
+##### 订阅服务
 连接到kafka服务器，指定Topic为`topic01`，消费组为 group1（如果不指定消费组，则默认随机生成）
 - 如果开启多个消费者，则将分摊该topic下的partition。
 - 如果开启不同的组，则实现了广播的效果。
 ```shell
-./bin/kafka-console-consumer.sh --bootstrap-server kafka_test:9092 --topic topic01 --group group1
+/bin/kafka-console-consumer.sh --bootstrap-server kafka_test:9092 --topic topic01 --group group1
+```
+更多信息
+```shell
+/bin/kafka-console-consumer.sh --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 --topic topic01 --group group1 --property print.key=true --property print.value=true --property key.separator=,
 ```
 
+##### 消费组列表
+```shell
+/bin/kafka-console-consumer.sh --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 --list
+```
 
-### Topic管理
+##### 消费者详情
+```shell
+/bin/kafka-console-consumer.sh --bootstrap-server kafka1:9092,kafka2:9092,kafka3:9092 --describe --group group1
+```
+
 
 
 

@@ -1,6 +1,6 @@
 ## 整体流程
 
-![zap](zaplog.assets/zap.png)
+![zap](zap.png)
 
 ### 初始化日志
 
