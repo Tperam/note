@@ -332,8 +332,6 @@ echo 1 > /tmp/zookeeper/myid
 ```shell
 broker.id=0
 ...
-```
-```shell
 listeners=PLAINTEXT:kafka1:9091
 ...
 ```
