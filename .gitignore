@@ -5,6 +5,7 @@
 *.so
 *.dylib
 .obsidian/*
+.trash/*
 
 # Test binary, built with `go test -c`
 *.test
