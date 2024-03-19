@@ -11,9 +11,22 @@
 - n2n 反馈是 500M宽带，能跑到300M（P2P），评判较为优秀
 - zerotier，500M带宽，可能才100M（P2P）
 
+frp 实现的协议列表 [文档](https://gofrp.org/zh-cn/docs)
+
+- tcp
+- udp
+- http
+- https
+- stcp
+- sudp
+- xtcp （P2P打洞，支持退回到其他连接方式，有保底操作，但打洞成功后为了稳定性并不会切回）
+- tcpMux
+
 其中 frp 是公司当前主用软件，同时又是go语言，打算基于此开始学习相关内网穿透
 
-[源码](https://github.com/fatedier/frp)，基于acf33db4e4b6c9cf9182d93280299010637b6324 commit版本
+[源码](https://github.com/fatedier/frp/tree/acf33db4e4b6c9cf9182d93280299010637b6324)，基于acf33db4e4b6c9cf9182d93280299010637b6324 commit版本
+
+
 
 ## 简介
 
@@ -138,11 +151,15 @@ func main(){
 
 ### frps
 
-#### 结构体介绍
+#### 结构体简介
+
+初步留印象即可，不需要深究，后续会有具体介绍
 
 ##### Service
 
 https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/service.go#L73
+
+整个项目流程都是基于此开始。
 
 当前结构体算是有状态结构体，用于保存所有链接，同时监听webserver提供外部访问。所有操作都是基于此开展（监听端口/新增链接）
 
@@ -154,18 +171,18 @@ https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/se
 
 https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/control.go#L97C2-L151C2
 
-当前看到，处理客户端链接时，使用此结构体
+Control是与客户端连接强相关，处理客户端链接时，使用此结构体。
 
-在最开始建立链接后，通过`Service.RegisterControl` 创建`control`对象对链接进行管理。
+在最开始与客户端建立链接后，通过`Service.RegisterControl` 创建`control`对象对链接进行管理。
 
-发送数据与接收数据`msgDispatcher` 
+该结构体封装了许多的功能，Proxy部分也是交由它管理。
+
+关键结构体发送数据与接收数据`msgDispatcher` 
 
 | 参数名        | 解释                           |
 | ------------- | ------------------------------ |
 | msgDispatcher | 处理链接(conn)的消息传递与接收 |
 | runID         | 客户端注册ID                   |
-
-
 
 
 
@@ -219,6 +236,83 @@ func (msgCtl *MsgCtl) RegisterMsg(typeByte byte, msg interface{}) {
 func (msgCtl *MsgCtl) UnPack(typeByte byte, buffer []byte) (msg Message, err error) {}
 func (msgCtl *MsgCtl) Pack(msg Message) ([]byte, error) {}
 ```
+
+##### msg.Login
+
+https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/msg/msg.go#L76C1-L92C2
+
+当client刚连接到server，会走一个登陆认证，该流程通过msg.Login进行认证。
+
+##### msg.NewProxy
+
+https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/msg/msg.go#L101C1-L132C2
+
+消息结构体，当client需要创建一个代理时（通常在登陆认证结束后，立刻就会发出此消息），将会向服务器发起msg.NewProxy消息
+
+
+
+##### ProxyConfigurer
+
+```go
+type ProxyConfigurer interface {
+	Complete(namePrefix string)
+	GetBaseConfig() *ProxyBaseConfig
+	// MarshalToMsg marshals this config into a msg.NewProxy message. This
+	// function will be called on the frpc side.
+	MarshalToMsg(*msg.NewProxy)
+	// UnmarshalFromMsg unmarshal a msg.NewProxy message into this config.
+	// This function will be called on the frps side.
+	UnmarshalFromMsg(*msg.NewProxy)
+}
+```
+
+用于将 NewProxy 解析为支持 ProxyConfigurer 接口的具体结构体，减少逻辑分支。后续将会通过该接口，生成实现Proxy接口的具体结构体
+
+
+
+##### Proxy（主逻辑）
+
+我们本次阅读代码主要想看的就是这块。frp它的各种协议也是通过此接口实现
+
+
+
+```go
+// 后续有
+type Proxy interface {
+	Context() context.Context
+	Run() (remoteAddr string, err error)
+	GetName() string
+	GetConfigurer() v1.ProxyConfigurer
+	GetWorkConnFromPool(src, dst net.Addr) (workConn net.Conn, err error)
+	GetUsedPortsNum() int
+	GetResourceController() *controller.ResourceController
+	GetUserInfo() plugin.UserInfo
+	GetLimiter() *rate.Limiter
+	GetLoginMsg() *msg.Login
+	Close()
+}
+
+// 一个Proxy最基础的信息
+type BaseProxy struct {
+	name          string
+	rc            *controller.ResourceController
+	listeners     []net.Listener
+	usedPortsNum  int
+	poolCount     int
+	getWorkConnFn GetWorkConnFn
+	serverCfg     *v1.ServerConfig
+	limiter       *rate.Limiter
+	userInfo      plugin.UserInfo
+	loginMsg      *msg.Login
+	configurer    v1.ProxyConfigurer
+
+	mu  sync.RWMutex
+	xl  *xlog.Logger
+	ctx context.Context
+}
+```
+
+
 
 
 
@@ -384,6 +478,7 @@ frp 的 server端，看当前服务端的主要原因是想稍微了解一一下
       			err = svr.RegisterControl(conn, m, internal)
       		}
       		// ... 登陆失败错误处理 ... 
+          	// ...
       	case *msg.NewWorkConn:
       		if err := svr.RegisterWorkConn(conn, m); err != nil {
       			conn.Close()
@@ -432,7 +527,7 @@ frp 的 server端，看当前服务端的主要原因是想稍微了解一一下
 
          
 
-   3. 写入ControlManager，根据RunID分配具体链接。
+   3. 写入ControlManager，根据RunID保存具体Control，管理相应链接
 
       ```go
       type ControlManager struct {
@@ -452,9 +547,219 @@ frp 的 server端，看当前服务端的主要原因是想稍微了解一一下
 
 
 
-##### 消息处理能力
+##### 消息处理
 
-###### proxy
+消息处理，其实就是frp中client与server链接相互传递的方式，我们在client连接流程中其实已经讲了msg.Login 的消息处理。
+
+###### proxy（重点）
+
+根据上文client 链接流程，我们可以知道，客户端在连接上服务器时，注册了Proxy的处理方式。
+
+根据其逻辑，可能是建立连接后，client会向server发起NewProxy的消息来建立代理。
+
+
+
+```go
+...
+ctl.msgDispatcher.RegisterHandler(&msg.NewProxy{}, ctl.handleNewProxy)
+...
+```
+
+其注册的处理，分别是
+
+结构体 [NewProxy](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/msg/msg.go#L100C1-L132C2)
+
+```go
+// When frpc login success, send this message to frps for running a new proxy.
+type NewProxy struct {
+    ...
+}
+```
+
+与处理方法
+
+```go
+func (ctl *Control) handleNewProxy(m msg.Message) {
+	xl := ctl.xl
+	inMsg := m.(*msg.NewProxy)
+
+	content := &plugin.NewProxyContent{
+		User: plugin.UserInfo{
+			User:  ctl.loginMsg.User,
+			Metas: ctl.loginMsg.Metas,
+			RunID: ctl.loginMsg.RunID,
+		},
+		NewProxy: *inMsg,
+	}
+	var remoteAddr string
+	retContent, err := ctl.pluginManager.NewProxy(content)
+	if err == nil {
+		inMsg = &retContent.NewProxy
+		remoteAddr, err = ctl.RegisterProxy(inMsg)
+	}
+
+	// register proxy in this control
+	resp := &msg.NewProxyResp{
+		ProxyName: inMsg.ProxyName,
+	}
+	if err != nil {
+		xl.Warnf("new proxy [%s] type [%s] error: %v", inMsg.ProxyName, inMsg.ProxyType, err)
+		resp.Error = util.GenerateResponseErrorString(fmt.Sprintf("new proxy [%s] error", inMsg.ProxyName),
+			err, lo.FromPtr(ctl.serverCfg.DetailedErrorsToClient))
+	} else {
+		resp.RemoteAddr = remoteAddr
+		xl.Infof("new proxy [%s] type [%s] success", inMsg.ProxyName, inMsg.ProxyType)
+		metrics.Server.NewProxy(inMsg.ProxyName, inMsg.ProxyType)
+	}
+	_ = ctl.msgDispatcher.Send(resp)
+}
+```
+
+处理逻辑如下：
+
+1. 整合成附带client传入消息与登录信息的结构体 `content`
+
+2. 调用`pluginManager`的`NewProxy`方法，也就是`pluginManager`的自定义插件
+
+   - 这里是流出的设计余地，可以让使用者自定义相关Plugin操作。（可能frp自己也有使用，但没怎么看到）
+
+   - 有了此设计，我们可以非常轻松的实现一些操作，比如：
+
+     - 当有客户端新建了一个Proxy时，可以挂消息插件，将信息通过 短信、微信、各种方式发送给运维。
+     - 禁止某个特定用户名连接（例如，用户是需要办理会员才可使用当前frp，则可通过当前接口筛选过滤）
+
+   - 但在当前看的frp流程中为空，不需要过度关注，只需要知道`pluginManager`是预留了插件接口，可以在不改变原结构的情况下增加部分我们想要的功能即可。
+
+     ```go
+     type Manager struct {
+     	loginPlugins       []Plugin
+     	newProxyPlugins    []Plugin
+     	closeProxyPlugins  []Plugin
+     	pingPlugins        []Plugin
+     	newWorkConnPlugins []Plugin
+     	newUserConnPlugins []Plugin
+     }
+     type Plugin interface {
+     	Name() string
+     	IsSupport(op string) bool
+     	Handle(ctx context.Context, op string, content interface{}) (res *Response, retContent interface{}, err error)
+     }
+     ```
+
+3. 在ctl中注册Proxy，此处是新建代理的关键代码，开始延展 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/control.go#L458C1-L532C2)
+
+   1. 从客户端上传的消息读取配置，并且校验
+
+      ```go
+      func NewProxyConfigurerFromMsg(m *msg.NewProxy, serverCfg *v1.ServerConfig) (v1.ProxyConfigurer, error) {
+          // 判断客户端发送消息的ProxyType是否为空，为空则默认设为tcp
+      	m.ProxyType = util.EmptyOr(m.ProxyType, string(v1.ProxyTypeTCP))
+      	
+          // 生成配置，并判断是否是定义值，当前proxyType支持：tcp、udp、tcpmux、http、https、stcp、xtcp、sudp
+          // 具体实现是反射，暂时不懂为什么，可能是便于类型处理，其内部直接使用Map，将各个类型对应了具体的Config
+          // 该Config实现了ProxyConfigurer接口
+      	configurer := v1.NewProxyConfigurerByType(v1.ProxyType(m.ProxyType))
+      	if configurer == nil {
+      		return nil, fmt.Errorf("unknown proxy type: %s", m.ProxyType)
+      	}
+      	// 根据上述通过类型的解析，获取到了具体的Config解析方式
+          // 解析m具体消息
+      	configurer.UnmarshalFromMsg(m)
+          // 补充了部分配置信息，保证配置完整
+      	configurer.Complete("")
+      
+          // 可能是验证配置是否与server冲突，（例如server禁止某个，但客户端申请这个）
+      	if err := validation.ValidateProxyConfigurerForServer(configurer, serverCfg); err != nil {
+      		return nil, err
+      	}
+      	return configurer, nil
+      }
+      ```
+
+      ```go
+      type ProxyConfigurer interface {
+      	Complete(namePrefix string)
+      	GetBaseConfig() *ProxyBaseConfig
+      	// MarshalToMsg marshals this config into a msg.NewProxy message. This
+      	// function will be called on the frpc side.
+      	MarshalToMsg(*msg.NewProxy)
+      	// UnmarshalFromMsg unmarshal a msg.NewProxy message into this config.
+      	// This function will be called on the frps side.
+      	UnmarshalFromMsg(*msg.NewProxy)
+      }
+      ```
+
+   2. 创建并运行代理
+
+      ```go
+      func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err error) {
+          // ...
+      	pxy, err := proxy.NewProxy(ctl.ctx, &proxy.Options{
+      		UserInfo:           userInfo,
+      		LoginMsg:           ctl.loginMsg,
+      		PoolCount:          ctl.poolCount,
+      		ResourceController: ctl.rc,
+      		GetWorkConnFn:      ctl.GetWorkConn,
+      		Configurer:         pxyConf, // 前一步流程获取到的Config
+      		ServerCfg:          ctl.serverCfg,
+      	})
+          ...
+      }
+      
+      func NewProxy(ctx context.Context, options *Options) (pxy Proxy, err error) {
+          // 上述获取到的配置
+      	configurer := options.Configurer
+      	xl := xlog.FromContextSafe(ctx).Spawn().AppendPrefix(configurer.GetBaseConfig().Name)
+      	// 速率限制
+      	var limiter *rate.Limiter
+      	limitBytes := configurer.GetBaseConfig().Transport.BandwidthLimit.Bytes()
+          // 如果是服务端限速，则建立limiter
+      	if limitBytes > 0 && configurer.GetBaseConfig().Transport.BandwidthLimitMode == types.BandwidthLimitModeServer {
+      		limiter = rate.NewLimiter(rate.Limit(float64(limitBytes)), int(limitBytes))
+      	}
+      	// 
+      	basePxy := BaseProxy{
+      		name:          configurer.GetBaseConfig().Name,
+      		rc:            options.ResourceController,
+      		listeners:     make([]net.Listener, 0),
+      		poolCount:     options.PoolCount,
+      		getWorkConnFn: options.GetWorkConnFn,
+      		serverCfg:     options.ServerCfg,
+      		limiter:       limiter,
+      		xl:            xl,
+      		ctx:           xlog.NewContext(ctx, xl),
+      		userInfo:      options.UserInfo,
+      		loginMsg:      options.LoginMsg,
+      		configurer:    configurer,
+      	}
+      	// 根据configurer的具体类型，获取相应的Proxy
+          // 支持的类型: tcp、udp、tcpmux、http、https、stcp、xtcp、sudp
+      	factory := proxyFactoryRegistry[reflect.TypeOf(configurer)]
+      	if factory == nil {
+      		return pxy, fmt.Errorf("proxy type not support")
+      	}
+          // 根据获取的handle方法，将Proxy信息传入，初始化获取到相应接口
+      	pxy = factory(&basePxy)
+      	if pxy == nil {
+      		return nil, fmt.Errorf("proxy not created")
+      	}
+      	return pxy, nil
+      }
+      ```
+
+   3. 对端口进行检查，查看客户端是否超过了创建最大端口数的上限
+
+   4. 检测客户端上报的代理名称（这是界面上我们的唯一标识）
+
+   5. 启动代理，此处就需要看[代理处理](#####代理处理) 部分。
+
+   6. 添加到代理管理中
+
+   7. 添加到ctl中
+
+至此，完成
+
+
 
 ###### ping
 
@@ -465,3 +770,23 @@ frp 的 server端，看当前服务端的主要原因是想稍微了解一一下
 ###### NatHoleReport
 
 ###### CloseProxy
+
+
+
+##### 代理处理（重点）
+
+###### tcp
+
+###### udp
+
+###### tcpmux
+
+###### http
+
+###### https
+
+###### stcp
+
+###### xtcp
+
+###### sudp
