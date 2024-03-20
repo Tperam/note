@@ -13,14 +13,18 @@
 
 frp 实现的协议列表 [文档](https://gofrp.org/zh-cn/docs)
 
-- tcp
-- udp
-- http
-- https
-- stcp
-- sudp
-- xtcp （P2P打洞，支持退回到其他连接方式，有保底操作，但打洞成功后为了稳定性并不会切回）
-- tcpMux
+| 连接方式 | 简介                                                         |
+| -------- | ------------------------------------------------------------ |
+| tcp      |                                                              |
+| udp      |                                                              |
+| http     |                                                              |
+| https    |                                                              |
+| stcp     | 加密版的TCP                                                  |
+| sudp     | 加密版的UDP                                                  |
+| xtcp     | P2P打洞，支持退回到其他连接方式，有保底操作，但打洞成功后为了稳定性并不会切回 |
+| tcpMux   | tcp的端口复用实现                                            |
+
+
 
 其中 frp 是公司当前主用软件，同时又是go语言，打算基于此开始学习相关内网穿透
 
@@ -747,14 +751,17 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
       }
       ```
 
-   3. 对端口进行检查，查看客户端是否超过了创建最大端口数的上限
-
-   4. 检测客户端上报的代理名称（这是界面上我们的唯一标识）
-
-   5. 启动代理，此处就需要看[代理处理](#####代理处理) 部分。
-
+      - 我们可以在[代理处理](#####代理处理（重点）)中看到具体实现逻辑
+     - 我们此次较为关注xtcp
+   
+3. 对端口进行检查，查看客户端是否超过了创建最大端口数的上限
+   
+4. 检测客户端上报的代理名称（这是界面上我们的唯一标识）
+   
+5. 启动代理，此处就需要看[代理处理](#####代理处理) 部分。
+   
    6. 添加到代理管理中
-
+   
    7. 添加到ctl中
 
 至此，完成
@@ -775,7 +782,98 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
 
 ##### 代理处理（重点）
 
-###### tcp
+###### tcp（重点）
+
+我们可以在[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/proxy/tcp.go)中看到，此处逻辑非常简短，不到100行的代码，我们来基于此来逐步阅读。[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/proxy/tcp.go#L49C1-L89C2)
+
+1. 判断客户端是否注册了 LoadBalancer（代理负载均衡）
+
+   ```go
+   func (pxy *TCPProxy) Run() (remoteAddr string, err error) {
+       ...
+       if pxy.cfg.LoadBalancer.Group != "" {
+   		l, realBindPort, errRet := pxy.rc.TCPGroupCtl.Listen(pxy.name, pxy.cfg.LoadBalancer.Group, pxy.cfg.LoadBalancer.GroupKey,
+   			pxy.serverCfg.ProxyBindAddr, pxy.cfg.RemotePort)
+       }
+       ...
+   }
+   ```
+
+   - 在client中有一行注释# frps will load balancing connections for proxies in same group
+   - 我们可以在文档中搜到，关于Load balancing的[描述](https://github.com/fatedier/frp/tree/acf33db4e4b6c9cf9182d93280299010637b6324?tab=readme-ov-file#load-balancing)
+   - 简述为，当访问服务器的端口时，将会随机转发到相同group+group_key下的某个链接中。
+
+2. 如果没有注册LoadBalancer，则走正常端口注册流程。
+
+   ```go
+   ...
+   pxy.realBindPort, err = pxy.rc.TCPPortManager.Acquire(pxy.name, pxy.cfg.RemotePort)
+   ...
+   ```
+
+   1. 检测client传入remote端口是否等于0
+      1. 判断是否为保留端口（根据client上报的name），如果是，则考虑是否是原先端口离线，准备重连。
+      2. 如果不是保留端口，则尝试从可用端口中读取出端口，并使用。（最多重试5次）
+      3. 如果还是失败，则可能为已经没有可用端口了。
+   2. remote端口不等于0的情况
+      - 判断端口是否可用`freePort[port]struct{}`
+        - 判断是否真的可用（尝试建立tcp/udp链接）
+          - 可用则占用该端口，返回
+          - 不可用则报错，端口不可用
+      - 判断端口是否已被使用`usedPort[port]struct{}`
+        - 如果已存在，则返回已被占用
+        - 返回端口不允许
+
+3. 在正常情况下，此时就已经获取到了可使用端口
+
+4. 建立连接
+
+   ```go
+   func (pxy *BaseProxy) startCommonTCPListenersHandler() {
+   	xl := xlog.FromContextSafe(pxy.ctx)
+       // 这里将所有 listener 都打开了，为什么？
+       // 暂时不是很理解，还是说一个Proxy可能开启多个监听？
+       // 根据之前代码流程，应该只开启了一个listener吧
+       // 此处listener为服务端监听的listener
+   	for _, listener := range pxy.listeners {
+   		go func(l net.Listener) {
+   			var tempDelay time.Duration // how long to sleep on accept failure
+   
+   			for {
+   				// block
+   				// if listener is closed, err returned
+                   // 开启端口监听，等待连接接入
+   				c, err := l.Accept()
+   				if err != nil {
+   					if err, ok := err.(interface{ Temporary() bool }); ok && err.Temporary() {
+   						if tempDelay == 0 {
+   							tempDelay = 5 * time.Millisecond
+   						} else {
+   							tempDelay *= 2
+   						}
+   						if max := 1 * time.Second; tempDelay > max {
+   							tempDelay = max
+   						}
+   						xl.Infof("met temporary error: %s, sleep for %s ...", err, tempDelay)
+   						time.Sleep(tempDelay)
+   						continue
+   					}
+   
+   					xl.Warnf("listener is closed: %s", err)
+   					return
+   				}
+   				xl.Infof("get a user connection [%s]", c.RemoteAddr().String())
+   				go pxy.handleUserTCPConnection(c)
+   			}
+   		}(listener)
+   	}
+   }
+   ```
+
+5. 处理用户TCP连接[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/proxy/proxy.go#L212C1-L272C2)
+
+   1. 创建用户连接信息
+   2. 
 
 ###### udp
 
@@ -787,6 +885,6 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
 
 ###### stcp
 
-###### xtcp
+###### xtcp（重点）
 
 ###### sudp
