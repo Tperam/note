@@ -42,7 +42,7 @@ frp是一款代理工具，它可以无视复杂的网络环境做代理，只�
 
 ## 源码解析
 
-因为我们主要是为了学习内网穿透（NAT穿透、NAT打洞、P2P），所以主要内容还是看他的xtcp。其余功能简单带过，理解一下他的大致实现方式即停，不深究。
+因为我们主要是为了学习内网穿透（NAT穿透、NAT打洞、P2P），所以主要内容还是看他的xtcp。打算以tcp为基础学习目标，了解具体流程后即停，不深究。
 
 其主要初始化手段是go的[`package init()`](https://go.dev/doc/effective_go#init)，此方式个人不是很建议。看起代码来其实还是比较复杂的。
 
@@ -50,12 +50,13 @@ frp是一款代理工具，它可以无视复杂的网络环境做代理，只�
 
 主要涉及库
 
-| 库名                                               | 功能                                                         |
-| -------------------------------------------------- | ------------------------------------------------------------ |
-| [cobra](https://github.com/spf13/cobra)            | 一个强大的cli 命令行提示工具，简单理解为类似flag包即可，不过其提示功能做的更加完善与强大 |
-| [websockect](https://github.com/gorilla/websocket) | gorilla 的 websocket包，但已经不更新了                       |
-| [fatedier/mux](https://github.com/fatedier/golib)  | 作者自有库，用于复用网络连接，根据数据的前几个字节将网络分发给不同的监听器。 |
-| [fatedier/msg](https://github.com/fatedier/golib)  | 作者自有库，传递消息的控制实现                               |
+| 库名                                                    | 功能                                                         |
+| ------------------------------------------------------- | ------------------------------------------------------------ |
+| [cobra](https://github.com/spf13/cobra)                 | 一个强大的cli 命令行提示工具，简单理解为类似flag包即可，不过其提示功能做的更加完善与强大 |
+| [websockect](https://github.com/gorilla/websocket)      | gorilla 的 websocket包，但已经不更新了                       |
+| [fatedier/golib/mux](https://github.com/fatedier/golib) | 作者自有库，用于复用网络连接，根据数据的前几个字节将网络分发给不同的监听器。 |
+| [fatedier/golib/msg](https://github.com/fatedier/golib) | 作者自有库，传递消息的控制实现                               |
+| [fatedier/golib/io](https://github.com/fatedier/golib)  | 消息传递、代理、加密、压缩实现。                             |
 
 #### cobra
 
@@ -766,17 +767,37 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
 
 至此，完成
 
+###### 【从此处跳到，[代理处理-tcp节](###### tcp（重点）) 】
 
+[代理处理-tcp节](###### tcp（重点）)
 
 ###### ping
 
+暂略
+
 ###### NatHoleVisitor
+
+暂略
 
 ###### NatHoleClient
 
+这里的操作实际上非常简单，就是一句话：[对notifyCh写入代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L253-L267)。
+
+当`NatHoleVisitor` 触发后，他会向[xtcp重点](######xtcp（重点）)节生成的sidCh写入一个sid。
+
+当client收到sid，就会往server发送一个NatHoleClient信息。
+
+发送后将会把session通过sid更新（补充client的NAT信息）。
+
+补充后对notifyCh写入信息，告诉 NatHoleVisitor 我这边已经完成，可以继续操作（判断NAT类型）了
+
 ###### NatHoleReport
 
+暂略
+
 ###### CloseProxy
+
+暂略
 
 
 
@@ -810,6 +831,8 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
    pxy.realBindPort, err = pxy.rc.TCPPortManager.Acquire(pxy.name, pxy.cfg.RemotePort)
    ...
    ```
+
+   [具体代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/ports/ports.go#L71-L141)
 
    1. 检测client传入remote端口是否等于0
       1. 判断是否为保留端口（根据client上报的name），如果是，则考虑是否是原先端口离线，准备重连。
@@ -870,21 +893,458 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
    }
    ```
 
-5. 处理用户TCP连接[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/proxy/proxy.go#L212C1-L272C2)
+5. 处理用户TCP连接，也可以说是访问者 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/proxy/proxy.go#L212C1-L272C2) 
 
-   1. 创建用户连接信息
-   2. 
+   1. 创建用户（访问者）连接信息
 
-###### udp
+   2. 走中间件（后续可以看下文档，看看有没有对Plugin的描述）
 
-###### tcpmux
+   3. 尝试从池中获取连接，具体获取方法参考 [Control.GetWorkConn](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/control.go#L251C1-L297C2) 
 
-###### http
+      ```go
+      // try all connections from the pool
+      workConn, err := pxy.GetWorkConnFromPool(userConn.RemoteAddr(), userConn.LocalAddr())
+      
+      func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn net.Conn, err error) {
+      	xl := xlog.FromContextSafe(pxy.ctx)
+      	// try all connections from the pool
+      	for i := 0; i < pxy.poolCount+1; i++ {
+              //
+      		if workConn, err = pxy.getWorkConnFn(); err != nil {
+      			xl.Warnf("failed to get work connection: %v", err)
+      			return
+      		}
+      		xl.Debugf("get a new work connection: [%s]", workConn.RemoteAddr().String())
+      		xl.Spawn().AppendPrefix(pxy.GetName())
+      		workConn = netpkg.NewContextConn(pxy.ctx, workConn)
+      
+      		var (
+      			srcAddr    string
+      			dstAddr    string
+      			srcPortStr string
+      			dstPortStr string
+      			srcPort    int
+      			dstPort    int
+      		)
+      
+      		if src != nil {
+      			srcAddr, srcPortStr, _ = net.SplitHostPort(src.String())
+      			srcPort, _ = strconv.Atoi(srcPortStr)
+      		}
+      		if dst != nil {
+      			dstAddr, dstPortStr, _ = net.SplitHostPort(dst.String())
+      			dstPort, _ = strconv.Atoi(dstPortStr)
+      		}
+      		err := msg.WriteMsg(workConn, &msg.StartWorkConn{
+      			ProxyName: pxy.GetName(),
+      			SrcAddr:   srcAddr,
+      			SrcPort:   uint16(srcPort),
+      			DstAddr:   dstAddr,
+      			DstPort:   uint16(dstPort),
+      			Error:     "",
+      		})
+      		if err != nil {
+      			xl.Warnf("failed to send message to work connection from pool: %v, times: %d", err, i)
+      			workConn.Close()
+      		} else {
+      			break
+      		}
+      	}
+      
+      	if err != nil {
+      		xl.Errorf("try to get work connection failed in the end")
+      		return
+      	}
+      	return
+      }
+      ```
 
-###### https
+      - 在TCP时，此处简单来说就是从池子中获取空闲连接，如果没有，则向client发送获取链接。若在超时时间内返回，则建立链接。
+      - 此步获取的连接是server与client的
 
-###### stcp
+   4. 根据配置，决定是否建立加密
+
+   5. 根据配置，决定是否压缩
+
+   6. 根据配置，决定是否限速
+
+   7. 使用`libio.Join`连接`server`&`client`的conn与`访问者`&`server`的conn
+
+      ```go
+      // Join two io.ReadWriteCloser and do some operations.
+      func Join(c1 io.ReadWriteCloser, c2 io.ReadWriteCloser) (inCount int64, outCount int64, errors []error) {
+      	var wait sync.WaitGroup
+      	recordErrs := make([]error, 2)
+      	pipe := func(number int, to io.ReadWriteCloser, from io.ReadWriteCloser, count *int64) {
+      		defer wait.Done()
+      		defer to.Close()
+      		defer from.Close()
+      
+      		buf := pool.GetBuf(16 * 1024)
+      		defer pool.PutBuf(buf)
+      		*count, recordErrs[number] = io.CopyBuffer(to, from, buf)
+      	}
+      
+      	wait.Add(2)
+      	go pipe(0, c1, c2, &inCount)
+      	go pipe(1, c2, c1, &outCount)
+      	wait.Wait()
+      
+      	for _, e := range recordErrs {
+      		if e != nil {
+      			errors = append(errors, e)
+      		}
+      	}
+      	return
+      }
+      ```
+
+   8. 至此，已然打通双端连接。
+
+###### 【额外梳理信息】
+
+读到这里，我们其实就已经知道了整个Server程序的大概设计实现。
+
+- Service，作为主服务伴随着整个程序的生命周期，同时也是整个程序的入口点，当有Client程序尝试连接Server:7000端口时（config中的BindPort），都将由此结构体进行处理。
+
+  - 并且在最开始创建了资源信息，[ResourceController](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/controller/resource.go#L28-L61)，后续传递给Control进行管理
+
+    - > 此处依赖个人认为不佳。应该有更优雅的实现方式（暂时为深思，但直观感受如此），比如实现成全局模块或者一个接口？`RegisterServerResource(netType string, host string) RealPort`
+
+  - 管理Control
+
+- Control，用于管理单个Client的连接，所有的数据流程交互都基于此实现。
+
+  - Client 创建代理连接
+  - 处理Client传输上来的各种请求
+    - `NewProxy, Ping, NatHoleVisitor, `
+
+- Dispatcher，为Control处理消息
+
+  - 自动将发出去的Message转变为相应的消息头后，发送给Client
+  - 自动将Client发送上来的数据进行解析，解析成功后调用提前注册好的处理方法
+    - 根据解析的消息，最终会得到不同的消息类型（`Ping/NewProxy`等），根据其消息类型，调用提前注册的handle方法
+  - 最重要的消息就是 msg.NewProxy！
+
+- Proxy，最终处理代理操作的结构体，Proxy是有分叉的，他分叉了`tcp udp sudp stcp http https xtcp tcpmux `等具体Proxy。
+
+  - 处理所有代理操作的逻辑
+
+
+```mermaid
+classDiagram
+  	Service --|> ControlManager
+	Service --|> ProxyManager
+  	Service --|> ResourceControl
+	
+  	
+  	ControlManager --|> Control
+  	Control --|> ProxyManager
+  	Control --|> Dispatcher
+  	Control --|> Msg
+  	Control --|> ResourceControl
+  	
+  	ProxyManager --|> Proxy
+  	Proxy <|-- HTTPProxy
+  	Proxy <|-- HTTPSProxy
+  	Proxy <|-- STCPProxy
+  	Proxy <|-- XTCPProxy
+  	Proxy <|-- TCPMuxProxy
+  	Proxy <|-- TCPProxy
+  	Proxy <|-- UDPProxy
+  	Proxy <|-- SUDPProxy
+  	
+	
+    class Service{
+        -listener net.Listener
+        -ctlManager *ControlManager
+        -rc *controller.ResourceController
+        -pxyManager *proxy.Manager
+    }
+    class ResourceControl{
+        - TCPPort
+        - UDPPort
+    }
+    class ControlManager{
+        ctlsByRunID map[string]*Control
+        mu sync.RWMutex
+    }
+    class Control{
+        #Properties
+        -rc *controller.ResourceController
+        -pxyManager *proxy.Manager
+        -pluginManager *plugin.Manager
+        -authVerifier auth.Verifier
+        -msgTransporter transport.MessageTransporter
+        -msgDispatcher *msg.Dispatcher
+        -loginMsg *msg.Login
+        -conn net.Conn
+        -workConnCh chan net.Conn
+        -proxies map[string]proxy.Proxy
+        -poolCount int
+        -portsUsedNum int
+        -lastPing atomic.Value
+        -runID string
+        -mu sync.RWMutex
+        -serverCfg *v1.ServerConfig
+
+        #Methods
+        +Close() error
+        +CloseProxy(closeMsg *msg.CloseProxy) (err error)
+        +GetWorkConn() (workConn net.Conn, err error)
+        +RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err error)
+        +RegisterWorkConn(conn net.Conn) error
+        +Replaced(newCtl *Control)
+        +Start()
+        +WaitClosed()
+	}
+    class ProxyManager{
+    pxys map[string]Proxy
+    mu sync.RWMutex
+    }
+    class Proxy{
+    }
+    class HTTPProxy{
+    }
+    class HTTPSProxy{
+    }
+    class STCPProxy{
+    }
+    class XTCPProxy{
+    }
+    class TCPMuxProxy{
+    }
+    class TCPProxy{
+    }
+    class UDPProxy{
+    }
+    class SUDPProxy{
+    }
+
+
+    class Dispatcher{
+    	["消息处理操作"]
+    }
+      
+```
+
+client与server沟通的消息体
+```mermaid
+classDiagram
+
+    Msg <|-- msgPing
+    Msg <|-- msgNatHoleVisitor
+    Msg <|-- msgNatHoleClient
+    Msg <|-- msgNatHoleReport
+    Msg <|-- msgClosePoxy
+    Msg <|-- msgLogin
+    Msg <|-- msgNewProxy
+
+    msgNewProxy *-- TCPProxyConfig
+    msgNewProxy *-- UDPProxyConfig
+    msgNewProxy *-- HTTPProxyConfig
+    msgNewProxy *-- HTTPSProxyConfig
+    msgNewProxy *-- TCPMuxProxyConfig
+    msgNewProxy *-- STCPProxyConfig
+    msgNewProxy *-- XTCPProxyConfig
+    msgNewProxy *-- SUDPProxyConfig
+	class Msg{
+    }
+    class msgPing{
+    }
+    class msgNatHoleVisitor{
+    }
+    class msgNatHoleClient{
+    }
+    class msgNatHoleReport{
+    }
+    class msgClosePoxy{
+    }
+    class msgLogin{
+    }
+    class msgNewProxy{
+   		[“为了方便操作，封装成了一个接口”]
+    }
+    class TCPProxyConfig{
+    }
+    class UDPProxyConfig{
+    }
+    class HTTPProxyConfig{
+    }
+    class HTTPSProxyConfig{
+    }
+    class TCPMuxProxyConfig{
+    }
+    class STCPProxyConfig{
+    }
+    class XTCPProxyConfig{
+    }
+    class SUDPProxyConfig{
+    }
+```
+
+
+
+
 
 ###### xtcp（重点）
 
-###### sudp
+在上述中，我们已经梳理完整个frp server端的整个流程了。此处开始我们最关心的部分，xtcp
+
+
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/proxy/xtcp.go#L48-L87)
+
+首先我们先看看他具体是怎么使用的 [使用方式文档](https://github.com/fatedier/frp/tree/acf33db4e4b6c9cf9182d93280299010637b6324?tab=readme-ov-file#expose-your-service-privately)
+
+首先我们想使用P2P之前，肯定需要用两个客户端，因此我们会有两套配置，一套认为成p2p的服务端，另一套被认为成p2p的访问者。
+
+同时，因为p2p不一定能百分百成功，所以有保底策略：`You might want to fallback to stcp if xtcp doesn't work.`
+
+```toml
+# frpc.toml
+serverAddr = "x.x.x.x"
+serverPort = 7000
+# set up a new stun server if the default one is not available.
+# natHoleStunServer = "xxx"
+
+# client（被代理端）
+[[proxies]]
+name = "p2p_ssh"
+type = "xtcp"
+secretKey = "abcdefg"
+localIP = "127.0.0.1"
+localPort = 22
+
+# 访问者端
+[[visitors]]
+name = "p2p_ssh_visitor"
+type = "xtcp"
+serverName = "p2p_ssh"
+secretKey = "abcdefg"
+bindAddr = "127.0.0.1"
+bindPort = 6000
+# when automatic tunnel persistence is required, set it to true
+keepTunnelOpen = false
+```
+
+开始看代码前，我们先确保一个概念统一。
+
+- server 服务器端
+- client 客户端 / 被代理端
+- visitor 想访问客户端的节点 / 访问者 
+
+流程如下：
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/proxy/xtcp.go#L49-L87)
+
+1. 判断 NatHoleController 是否为空（已在NewService初始化过）[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/service.go#L331-L336)
+
+2. 创建一个client配置，并存储一个sidCh（传递字符串
+
+   ```go
+   cfg := &ClientCfg{
+       name:       name,
+       sk:         sk,
+       allowUsers: allowUsers,
+       sidCh:      make(chan string),
+   }
+   c.clientCfgs[name] = cfg
+   return cfg.sidCh, nil
+   ```
+
+3. 循环：监听上一步生成的 sidCh变量，等待发送数据
+
+   ```go
+   go func() {
+   		for {
+   			select {
+   			case <-pxy.closeCh:
+   				return
+   			case sid := <-sidCh:
+   				workConn, errRet := pxy.GetWorkConnFromPool(nil, nil)
+   				if errRet != nil {
+   					continue
+   				}
+   				m := &msg.NatHoleSid{
+   					Sid: sid,
+   				}
+   				errRet = msg.WriteMsg(workConn, m)
+   				if errRet != nil {
+   					xl.Warnf("write nat hole sid package error, %v", errRet)
+   				}
+   				workConn.Close()
+   			}
+   		}
+   	}()
+   ```
+
+4. 当sidCh传入值后，触发此select，开始获取工作线程
+
+   ```go
+   workConn, errRet := pxy.GetWorkConnFromPool(nil, nil)
+   
+   // 在tcp时，是使用下列方式获取，，用户传入远端
+   // workConn, err := pxy.GetWorkConnFromPool(userConn.RemoteAddr(), userConn.LocalAddr())
+   ```
+
+   - 具体实现可以查看 代理处理-tcp 5.3节
+   - server当前就会向client端，发送StartWorkConn
+
+5. 向client发送sid。
+
+6. 关闭当前连接，完成操作，重复循环。
+
+当前**仅为服务器**做的操作，其操作十分简单，就做了几步。
+
+1. 简单来说就是建立了一个 ClientCfg，并且生成了一个 `chan string` 进行发信。
+2. 监控等待 `chan string` 被出发传入值
+3. 当传入值后，将其发送到客户端中。
+
+之前的TCP其实到这里就已经结束了（因为其直接在`Service.ResourceController`中注册了端口，访问端口的操作直接在`startCommonTCPListenersHandler`中`l.Accept`了新的连接，并直接做了`io.Copy`操作，将client与visitor直接绑定转发，server不做其余操作。
+
+但在p2p中，我们server端是用与转发连接信息的，所以此处visitor会使用该channel传输数据，达到通过服务端发送消息的目的。
+
+通过溯源我们发现，发现是在初始化Control时，注册的消息体[msg.NatHoleVisitor](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/control.go#L366)。其关键代码在Control代码中，有对该chan进行写入[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L152-L251).
+
+1. 通过随机数生成sid
+2. 生成session
+   - 刚才生成的sid
+   - 访问者信息
+   - notifyCh struct{}
+3. 获取`XTCPProxy.Run`中生成的`ClientCfg`
+4. 获取到配置并且`authkey`校验通过后，将session保存
+5. 将给`XTCPProxy.Run`方法中生成的`sidCh`发送sid
+6. select notifyCh，并设置超时时间（文档中标注，超一定时间后退化为stcp）
+   - 通过溯源我们发现，notifyCh 也是在初始化Control时注册的消息体[msg.NatHoleClient](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/control.go#L367)，[对notifyCh写入代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L253-L267)
+7. 此处假设notifyCh有返回值，调用`c.analysis` [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L296-L367)
+   1. 分析双端（client and visitor）NAT类型 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/classify.go#L42-L108)
+      1. 对客户端上报的 `.MappedAddrs` 与 `.AssistedAddrs` 进行分析
+         - `.MappedAddrs` 就是映射IP:Port（或简单理解为内网机器的外网IP）
+         - `.AssistedAddrs` 就是机器所有的内网IP:Port
+      2. 遍历上报数据集，判断NAT类型
+         - IP是否发生变化
+         - Port是否发生变化
+      3. 后续根据上述遍历结果，得到ip、port是否变化的结果，评估为不同的NAT类型。
+         - ip port都变就是 HardNat
+         - ip变也是 HardNat
+         - port变也是 HardNat
+         - ip port 都没变就是EasyNat
+      4. 如果Port有变化，但变化在5以内，则代表为`RegularPortsChange`
+   2. 将分析结果填入session中。
+   3. 分析双端NAT行为，并产生对应操作建议 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L271-L301)
+      1. 判断记录是否曾存在，不存在则创建一个 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L179-L216)
+         1. 记录eazyNat hardNat portsChangedRegular 的数量
+         2. 根据数量判断
+   4. 
+
+
+
+
+
+
+
+
+
+
+
