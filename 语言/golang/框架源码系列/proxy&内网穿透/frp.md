@@ -777,7 +777,78 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
 
 ###### NatHoleVisitor
 
-暂略
+当前是用于处理访问者的（我们都知道，P2P是需要双端都有支持的（客户端A，客户端B），当客户端B想访问客户端A时，在FRP的定义中就是Visitor，此处即为代码：
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L152-L251)
+
+1. 通过随机数生成sid
+
+2. 生成session
+
+   - 刚才生成的sid
+   - 访问者信息
+   - notifyCh struct{}
+
+3. 获取`XTCPProxy.Run`中生成的`ClientCfg`
+
+4. 获取到配置并且`authkey`校验通过后，将session保存
+
+5. 将给`XTCPProxy.Run`方法中生成的`sidCh`发送sid
+
+6. select notifyCh，并设置超时时间（文档中标注，超一定时间后退化为stcp）
+
+   - 通过溯源我们发现，notifyCh 也是在初始化Control时注册的消息体[msg.NatHoleClient](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/control.go#L367)，[对notifyCh写入代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L253-L267)
+
+7. 此处假设notifyCh有返回值，调用`c.analysis` [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L296-L367)
+
+   1. 分析双端（client and visitor）NAT类型 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/classify.go#L42-L108)
+
+      1. 对客户端上报的 `.MappedAddrs` 与 `.AssistedAddrs` 进行分析
+
+         - `.MappedAddrs` 就是映射IP:Port（或简单理解为内网机器的外网IP）
+         - `.AssistedAddrs` 就是机器所有的内网IP:Port
+
+      2. 遍历上报数据集，判断NAT类型
+
+         - IP是否发生变化
+         - Port是否发生变化
+
+      3. 后续根据上述遍历结果，得到ip、port是否变化的结果，评估为不同的NAT类型。
+
+         - ip port都变就是 HardNat
+         - ip变也是 HardNat
+         - port变也是 HardNat
+         - ip port 都没变就是EasyNat
+
+      4. 如果Port有变化，但变化在**5**以内，则代表为`RegularPortsChange`
+
+         （此处对于`RegularPortsChange`还不是很清晰，需要根据客户端理解）
+
+   2. 将分析结果填入session中。
+
+   3. 分析双端NAT行为，并产生对应操作建议 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L271-L301)
+
+      1. 判断记录是否曾存在于`Control.analyzer.records`，不存在则创建一个 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L179-L216)
+         1. 记录`eazyNat`、`hardNat`、`portsChangedRegular` 的数量
+         2. 根据数量判断采取什么模式[代码]()
+            - 如果两个都是easyNat，则直接判断谁是公网IP，采用[模式0](######模式0)。
+            - 如果一个hardNat，并且有一个`RegularPortsChange`，则采用[模式1](######模式1)，[模式2](######模式2)，[模式0](######模式0)
+            - 如果一个hardNat，并且没有`RegularPortsChange`，则采用[模式2](######模式2)，[模式1](######模式1)，[模式0](######模式0)
+            - 如果两个hardNat，并且都是`RegularPortsChange`，则采用[模式3](######模式3)，[模式1](######模式4)
+            - 如果两个hardNat，并且只有一个是`RegularPortsChange`，则采用[模式4](######模式4)。
+            - 如果都是hardNat，并且没有`RegularPortsChange`，则采用[模式0](######模式0)，[模式1](######模式1)，[模式3](######模式3)
+         3. 同时，上述步骤会对每个操作进行基础评分（公网IP为1，其他类型皆为0）
+         4. 后续将根据最大分值，优先执行某些操作。
+         5. 将上述获取到的所有模式，作为`scores`变量，返回，保存到当前`Control.analyzer.records`中
+      2. 获取最高分的打洞建议（通常是批量的 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L234-L247)
+      3. 获取当前执行到的行为
+      4. 根据网络难度，决定谁是发送者，谁是接收者[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L283-L299)
+         - 通常而言，更复杂的NAT类型作为发送者更好打通
+      5. 返回`msg.NatHoleResp`消息体给双方客户端
+
+   到这里，NatHoleVisitor 消息就已经执行完毕了，剩下需从Client看起。
+
+   
 
 ###### NatHoleClient
 
@@ -1307,36 +1378,249 @@ keepTunnelOpen = false
 
 通过溯源我们发现，发现是在初始化Control时，注册的消息体[msg.NatHoleVisitor](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/control.go#L366)。其关键代码在Control代码中，有对该chan进行写入[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L152-L251).
 
-1. 通过随机数生成sid
-2. 生成session
-   - 刚才生成的sid
-   - 访问者信息
-   - notifyCh struct{}
-3. 获取`XTCPProxy.Run`中生成的`ClientCfg`
-4. 获取到配置并且`authkey`校验通过后，将session保存
-5. 将给`XTCPProxy.Run`方法中生成的`sidCh`发送sid
-6. select notifyCh，并设置超时时间（文档中标注，超一定时间后退化为stcp）
-   - 通过溯源我们发现，notifyCh 也是在初始化Control时注册的消息体[msg.NatHoleClient](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/server/control.go#L367)，[对notifyCh写入代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L253-L267)
-7. 此处假设notifyCh有返回值，调用`c.analysis` [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L296-L367)
-   1. 分析双端（client and visitor）NAT类型 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/classify.go#L42-L108)
-      1. 对客户端上报的 `.MappedAddrs` 与 `.AssistedAddrs` 进行分析
-         - `.MappedAddrs` 就是映射IP:Port（或简单理解为内网机器的外网IP）
-         - `.AssistedAddrs` 就是机器所有的内网IP:Port
-      2. 遍历上报数据集，判断NAT类型
-         - IP是否发生变化
-         - Port是否发生变化
-      3. 后续根据上述遍历结果，得到ip、port是否变化的结果，评估为不同的NAT类型。
-         - ip port都变就是 HardNat
-         - ip变也是 HardNat
-         - port变也是 HardNat
-         - ip port 都没变就是EasyNat
-      4. 如果Port有变化，但变化在5以内，则代表为`RegularPortsChange`
-   2. 将分析结果填入session中。
-   3. 分析双端NAT行为，并产生对应操作建议 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L271-L301)
-      1. 判断记录是否曾存在，不存在则创建一个 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L179-L216)
-         1. 记录eazyNat hardNat portsChangedRegular 的数量
-         2. 根据数量判断
-   4. 
+我们直接转到[NatHoleVisitor](#####NatHoleVisitor)查看
+
+
+
+
+
+#### 零散数据
+
+##### 打洞建议行为（mode）
+
+内部代码定义了一堆`RecommandBehavior`，根据语义可能是发送者与接收者所要干的事儿。
+
+###### 模式0
+
+*// mode 0, both EasyNAT, PublicNetwork is always receiver*
+
+- 
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L27-L49)
+
+###### 模式1
+
+  *// mode 1, HardNAT is sender, EasyNAT is receiver, port changes is regular*
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L51-L65)
+
+###### 模式2
+
+*// mode 2, HardNAT is receiver, EasyNAT is sender*
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L67-L84)
+
+###### 模式3
+
+*// mode 3, For HardNAT & HardNAT, both changes in the ports are regular*
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L86-L100)
+
+###### 模式4
+
+*// mode 4, Regular ports changes are usually the sender.*
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L102-L119)
+
+
+
+
+
+### fpc
+
+还是一样，采用cobra封装过。所以我们直接从root开始看起。（现在看习惯了，感觉cobra的`init()`方法也眉清目秀了
+
+本次就不像上面一样，弯弯绕绕了，直接了当的开始写了。
+
+贯穿上文，我们主要目的是看 `msg.NatHoleVisitor` 触发后的  `msg.NatHoleResp`的响应。以及触发`NatHoleVisitor`之前的`MappedAddrs/AssistedAddrs`变量是如何获取的。
+
+#### 开始流程
+
+开始执行
+
+```go
+err := runClient(cfgFile)
+```
+
+将配置文件拆分。
+
+```go
+cfg, proxyCfgs, visitorCfgs, isLegacyFormat, err := config.LoadClientConfig(cfgFilePath, strictConfigMode)
+```
+
+验证配置文件...
+
+初始化&开启服务 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/cmd/frpc/sub/root.go#L133-L161)
+
+此处非常暴力的，循环等待登陆成功
+
+```go
+// first login to frps
+svr.loopLoginUntilSuccess(10*time.Second, lo.FromPtr(svr.common.LoginFailExit))
+```
+
+其中代码，登陆成功后新建`Control`对链接进行管理（与服务端很像，但完全不一样）
+
+此部分登陆代码需要稍微认真看一下，因为整个进程其实可以说是从此开始的
+
+```go
+loginFunc := func() (bool, error) {
+		
+    conn, connector, err := svr.login()
+    // ... error handle ...
+
+    // 链接成功了
+    svr.cfgMu.RLock()
+    proxyCfgs := svr.proxyCfgs
+    visitorCfgs := svr.visitorCfgs
+    svr.cfgMu.RUnlock()
+    // ... handle connEncrypted ...
+    sessionCtx := &SessionContext{
+        Common:        svr.common,
+        RunID:         svr.runID,
+        Conn:          conn,
+        ConnEncrypted: connEncrypted,
+        AuthSetter:    svr.authSetter,
+        Connector:     connector,
+    }
+
+    // 创建并管理链接
+    ctl, err := NewControl(svr.ctx, sessionCtx)
+    if err != nil {
+        conn.Close()
+        xl.Errorf("NewControl error: %v", err)
+        return false, err
+    }
+    // 处理工作链接的方式，默认是直接采用下面方法
+    // https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/ssh/server.go#L122-L132
+    ctl.SetInWorkConnCallback(svr.handleWorkConnCb)
+
+    // 开启 proxy 配置，与访问配置
+    ctl.Run(proxyCfgs, visitorCfgs)
+
+    // close and replace previous control
+    svr.ctlMu.Lock()
+    if svr.ctl != nil {
+        svr.ctl.Close()
+    }
+    svr.ctl = ctl
+    svr.ctlMu.Unlock()
+    return true, nil
+}
+```
+
+我们当前需求是看xtcp协议，我们先带入client客户端去看具体实现。
+
+根据上文，我们xtcp连接流程实际如下：
+
+1. client与server建立连接。（msg.Login)
+2. client与server建立xtcp代理（msg.NewProxy）
+3. visitor与server建立连接（msg.Login)
+4. visitor触发`msg.NatHoleVisitor`，并触发xtcp中挂的`sidCh`，让server往client发送`msg.NatHoleSid` 信息
+   - 其中传入了他的打洞信息
+5. client收集穿透信息
+6. client发送消息到服务器，触发`msg.NatHoleClient`消息
+7. 该消息又触发visitor挂在server中的notifyCh
+8. server就开始分配打洞信息（或打洞建议）
+9. 服务器返回具体打洞信息
+
+所以我们现在应该看 [` ctl.Run(proxyCfgs, visitorCfgs)`](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/service.go#L328) 部分，并主看`proxyCfgs`。
+
+我们可以看到，其官网配置中，一个frpc客户端是支持同时开启多个代理的，所以此处命名为
+
+```go
+// start all proxies
+ctl.pm.UpdateAll(proxyCfgs)
+```
+
+#### 启动所有Proxy
+
+[完整代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/proxy/proxy_manager.go#L132-L175)
+
+其实际我们需要看的代码如下
+
+```go
+addPxyNames := make([]string, 0)
+for _, cfg := range proxyCfgs {
+    name := cfg.GetBaseConfig().Name
+    if _, ok := pm.proxies[name]; !ok {
+        pxy := NewWrapper(pm.ctx, cfg, pm.clientCfg, pm.HandleEvent, pm.msgTransporter)
+        if pm.inWorkConnCallback != nil {
+            pxy.SetInWorkConnCallback(pm.inWorkConnCallback)
+        }
+        pm.proxies[name] = pxy
+        addPxyNames = append(addPxyNames, name)
+
+        pxy.Start()
+    }
+}
+```
+
+上述代码中，我们遍历了所有可用的配置。并将其包装为一个Proxy
+
+```go
+pxy := NewWrapper(pm.ctx, cfg, pm.clientCfg, pm.HandleEvent, pm.msgTransporter)
+```
+
+并且其中会根据具体的cfg配置文件类型，初始化相应的Proxy在此。
+
+```go
+func ... {
+    factory := proxyFactoryRegistry[reflect.TypeOf(pxyConf)]
+    if factory == nil {
+        return nil
+    }
+    return factory(&baseProxy, pxyConf)
+}
+// proxyFactoryRegistry 根据解析出来的具体配置，映射到具体的代理结构体。
+// server端也是如此实现
+pxyConfs := []v1.ProxyConfigurer{
+    &v1.TCPProxyConfig{},
+    &v1.HTTPProxyConfig{},
+    &v1.HTTPSProxyConfig{},
+    &v1.STCPProxyConfig{},
+    &v1.TCPMuxProxyConfig{},
+}
+for _, cfg := range pxyConfs {
+    RegisterProxyFactory(reflect.TypeOf(cfg), NewGeneralTCPProxy)
+}
+RegisterProxyFactory(reflect.TypeOf(&v1.SUDPProxyConfig{}), NewSUDPProxy)
+RegisterProxyFactory(reflect.TypeOf(&v1.SUDPProxyConfig{}), NewSUDPProxy)
+RegisterProxyFactory(reflect.TypeOf(&v1.XTCPProxyConfig{}), NewXTCPProxy)
+```
+
+此处支持的代理模式已经在上述中写出。
+
+回到启动Proxy步骤，其`pm.SetInWorkConnCallback` 为空。他在外部仅作回调代理。
+
+保存配置到ProxyManager中（相当于当前链接的代理管理模块）
+
+在创建好代理之后[`pxy.Start()`](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/proxy/proxy_manager.go#L169)，开启代理（或者说开启监控）。
+
+其实际代码如下：[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/proxy/proxy_wrapper.go#L183-L228)。该代码做了以下几个操作
+
+1. 每3s进行一次健康巡检
+   - 除非代理关闭，直接退出
+   - 健康检查通知，直接执行
+2. 判断health是否等于0
+   - 0 为健康
+     1. 健康状态下判断代理阶段，如果处于以下几种状态，则改变代理状态，并重启代理
+        - 状态：`ProxyPhaseNew` `ProxyPhaseCheckFailed` `ProxyPhaseWaitStart && 最后一次消息超时` `ProxyPhaseStartErr && 启动代理超时`
+   - 1 为异常
+     1. 异常状态下，判断是否代理在运行，如果在运行则杀掉，状态置为`ProxyPhaseCheckFailed`
+
+上述代码最重要部分其实就是 health 为0时的初始化阶段。
+
+其挂了一个回调，`event.StartProxyPayload`
+
+```go
+var newProxyMsg msg.NewProxy
+pw.Cfg.MarshalToMsg(&newProxyMsg)
+pw.lastSendStartMsg = now
+_ = pw.handler(&event.StartProxyPayload{
+    NewProxyMsg: &newProxyMsg,
+})
+```
 
 
 
@@ -1346,5 +1630,9 @@ keepTunnelOpen = false
 
 
 
+服务器所发来的消息都是通过此处做的代理。
 
+
+
+#### 启动Visitor
 
