@@ -57,6 +57,7 @@ frp是一款代理工具，它可以无视复杂的网络环境做代理，只�
 | [fatedier/golib/mux](https://github.com/fatedier/golib) | 作者自有库，用于复用网络连接，根据数据的前几个字节将网络分发给不同的监听器。 |
 | [fatedier/golib/msg](https://github.com/fatedier/golib) | 作者自有库，传递消息的控制实现                               |
 | [fatedier/golib/io](https://github.com/fatedier/golib)  | 消息传递、代理、加密、压缩实现。                             |
+| [stun](https://github.com/pion/stun)                    | stun库，客户端去获取MappedAddr与AssistedAddr                 |
 
 #### cobra
 
@@ -793,7 +794,7 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
 
 4. 获取到配置并且`authkey`校验通过后，将session保存
 
-5. 将给`XTCPProxy.Run`方法中生成的`sidCh`发送sid
+5. **将给`XTCPProxy.Run`方法中生成的`sidCh`发送sid**
 
 6. select notifyCh，并设置超时时间（文档中标注，超一定时间后退化为stcp）
 
@@ -801,7 +802,7 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
 
 7. 此处假设notifyCh有返回值，调用`c.analysis` [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/controller.go#L296-L367)
 
-   1. 分析双端（client and visitor）NAT类型 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/classify.go#L42-L108)
+   1. 分析双端（client and visitor）NAT类型 [ClassifyNATFeature](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/classify.go#L42-L108)
 
       1. 对客户端上报的 `.MappedAddrs` 与 `.AssistedAddrs` 进行分析
 
@@ -1485,6 +1486,7 @@ loginFunc := func() (bool, error) {
     }
 
     // 创建并管理链接
+    // 其中创建了msgDispatcher与RegisterHandler
     ctl, err := NewControl(svr.ctx, sessionCtx)
     if err != nil {
         conn.Close()
@@ -1508,6 +1510,57 @@ loginFunc := func() (bool, error) {
     return true, nil
 }
 ```
+
+上述代码中，我们主要需要看NewControl方法
+
+```go
+func NewControl(ctx context.Context, sessionCtx *SessionContext) (*Control, error) {
+	// new xlog instance
+	ctl := &Control{
+		ctx:        ctx,
+		xl:         xlog.FromContextSafe(ctx),
+		sessionCtx: sessionCtx,
+		doneCh:     make(chan struct{}),
+	}
+	ctl.lastPong.Store(time.Now())
+	// 判断消息是否加密
+	if sessionCtx.ConnEncrypted {
+		cryptoRW, err := netpkg.NewCryptoReadWriter(sessionCtx.Conn, []byte(sessionCtx.Common.Auth.Token))
+		if err != nil {
+			return nil, err
+		}
+        // 与服务端一样的msgDispatcher
+		ctl.msgDispatcher = msg.NewDispatcher(cryptoRW)
+	} else {
+        // 与服务端一样的msgDispatcher
+		ctl.msgDispatcher = msg.NewDispatcher(sessionCtx.Conn)
+	}
+    // 此处注册的方法后续会着重说
+	ctl.registerMsgHandlers()
+	ctl.msgTransporter = transport.NewMessageTransporter(ctl.msgDispatcher.SendChannel())
+
+	ctl.pm = proxy.NewManager(ctl.ctx, sessionCtx.Common, ctl.msgTransporter)
+	ctl.vm = visitor.NewManager(ctl.ctx, sessionCtx.RunID, sessionCtx.Common, ctl.connectServer, ctl.msgTransporter)
+	return ctl, nil
+}
+```
+
+在客户端中，我们初始化了以下几个消息处理接口。消息具体怎么处理的，在server端已经处理了。他定义了自己的消息协议（消息类型+长度+消息体）。[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/control.go#L228-L233)
+
+```go
+ctl.msgDispatcher.RegisterHandler(&msg.ReqWorkConn{}, msg.AsyncHandler(ctl.handleReqWorkConn))
+ctl.msgDispatcher.RegisterHandler(&msg.NewProxyResp{}, ctl.handleNewProxyResp)
+ctl.msgDispatcher.RegisterHandler(&msg.NatHoleResp{}, ctl.handleNatHoleResp)
+ctl.msgDispatcher.RegisterHandler(&msg.Pong{}, ctl.handlePong)
+```
+
+我们在这里可以看到，注册的消息体和方法，后续将会回过头看这些操作。
+
+
+
+#### 回顾xtcp流程
+
+好，从此我们开始看具体的xtcp流程
 
 我们当前需求是看xtcp协议，我们先带入client客户端去看具体实现。
 
@@ -1611,7 +1664,7 @@ RegisterProxyFactory(reflect.TypeOf(&v1.XTCPProxyConfig{}), NewXTCPProxy)
 
 上述代码最重要部分其实就是 health 为0时的初始化阶段。
 
-其挂了一个回调，`event.StartProxyPayload`
+其挂了一个回调，`event.StartProxyPayload`，发送消息`NewProxyMsg`
 
 ```go
 var newProxyMsg msg.NewProxy
@@ -1621,6 +1674,149 @@ _ = pw.handler(&event.StartProxyPayload{
     NewProxyMsg: &newProxyMsg,
 })
 ```
+
+其具体发送消息的结构体，与server端一致，在`NewControl`中初始化的`msgDispatcher`
+
+#### msgDispatcher 挂载的处理方法
+
+##### ReqWorkConn
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/control.go#L123-L159)
+
+```go
+func (ctl *Control) handleReqWorkConn(_ msg.Message) {
+	xl := ctl.xl
+	workConn, err := ctl.connectServer()
+	if err != nil {
+		xl.Warnf("start new connection to server error: %v", err)
+		return
+	}
+
+	m := &msg.NewWorkConn{
+		RunID: ctl.sessionCtx.RunID,
+	}
+	if err = ctl.sessionCtx.AuthSetter.SetNewWorkConn(m); err != nil {
+		xl.Warnf("error during NewWorkConn authentication: %v", err)
+		workConn.Close()
+		return
+	}
+	if err = msg.WriteMsg(workConn, m); err != nil {
+		xl.Warnf("work connection write to server error: %v", err)
+		workConn.Close()
+		return
+	}
+
+	var startMsg msg.StartWorkConn
+	if err = msg.ReadMsgInto(workConn, &startMsg); err != nil {
+		xl.Tracef("work connection closed before response StartWorkConn message: %v", err)
+		workConn.Close()
+		return
+	}
+	if startMsg.Error != "" {
+		xl.Errorf("StartWorkConn contains error: %s", startMsg.Error)
+		workConn.Close()
+		return
+	}
+
+	// dispatch this work connection to related proxy
+	ctl.pm.HandleWorkConn(startMsg.ProxyName, workConn, &startMsg)
+}
+```
+
+reqWorkConn，是server向client索要新连接，我们来看看上述具体执行。
+
+1. 调用了`connectServer`，其默认就是调用了此文件[connector](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/connector.go)
+   - 由于我们当前既不是`quicConn`也不是`muxSession`，所以我们调用到了[`realConnect`](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/connector.go#L147-L215) 
+     - realConnect中代码过于复杂，暂时还不能理解。
+       - 但简单理解就是frp封装了一个libdial库，用于处理各种链接类型，并对于请求的各种操作进行了封装，实现成类似中间件的模式。
+       - （比如，其中有多种可选参数，是否需要给消息头加密，ws协议加密）。
+     - 换句话说，就是用go的optional模式，封装了dial，
+       - 该模式增加了对tcp的各种控制操作（超时、tls、keepalive、proxyauth等操作）。回到最初，他其实就是一个链接。
+2. 创建好连接后，发送一条消息给server
+3. 等待服务器返回`msg.StartWorkConn`类型的消息
+4. 调用到具体代理的[`InWorkConn` ](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/proxy/proxy_wrapper.go#L261)方法
+5. 开始代理
+
+###### 【xtcp】
+
+回顾上文[msg.NatHoleVisitor 第五序列](######NatHoleVisitor)，在开启xtcp代理的时候，我们知道server是在visitor访问后会先触发reqWorkConn，并发送 `msg.NatHoleSid` 给client。我们当前就在此位置查看client部分的流程。
+
+[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/client/proxy/xtcp.go#L56-L123)
+
+1. 读出sid
+
+2. `nathole.Prepare([]string{pxy.clientCfg.NatHoleSTUNServer})`  
+
+   - 获取打洞前的数据，根据命名我们可以看出，此处是调用了stun服务器，估计是做ip、端口的预测。
+   - 同时，我们需要记住，我们判断最终打洞行为的变量`MappedAddrs` 与`AssistedAddrs`
+   - [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/nathole.go#L110-L147)
+
+   1. 创建一个随机的本地地址
+
+   2. 监听本地地址（并将到来的信息发到c.messageChan中） [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/discovery.go#L41)
+
+   3. 遍历探测服务器（当前只有一个）
+
+   4. 往stun服务器建立连接。
+
+   5. 往stun服务器中写transactionID等信息
+
+   6. 监听dc.messageChan
+
+   7. 返回了个stun.Message，但具体内容是什么不确定，只知道，拿了以下几个结构体去解码
+
+      ```go
+      xorAddrGetter := &stun.XORMappedAddress{}
+      mappedAddrGetter := &stun.MappedAddress{}
+      changedAddrGetter := ChangedAddress{}
+      otherAddrGetter := &stun.OtherAddress{}
+      
+      resp.externalAddr = mappedAddrGetter.String()
+      resp.externalAddr = xorAddrGetter.String()
+      resp.otherAddr = changedAddrGetter.String()
+      resp.otherAddr = otherAddrGetter.String()
+      ```
+
+      具体需要看下https://github.com/pion/stun 代码
+
+      但具体实现也没看懂啥，家里测试的结果就是只有`xorAddrGetter`获取成功。
+
+      又找了一台NAT1的测试，还是只返回一个....
+
+      但这里又要求至少返回两个 addrs...，由于一直获取不到两个（他只有获取到两个以上的addr才会向下进行操作，所以我们假设其stun服务器又两个
+
+      - 并在家内进行测试[测试代码](###stun测试代码)，得到了两个相同的ip与port（在本地使用相同端口的情况下，访问两个不同的stunserver，stun具体原理可去网上搜，或者后续我将在**内网穿透.md**补充）
+
+   8. 开始获取本地ip信息
+
+   9. 获取本地所有网卡的ip（有可能能连外网的
+
+   10. 调用`ClassifyNATFeature`，也就是[msg.NatHoleVisitor 7.1](######NatHoleVisitor) 中的操作，判断NAT类型。
+
+       - 判断是否是公网IP 
+       - 在Stun变换的情况下，判断IP是否有改变 （Address-Restricted Cone NAT）
+       - 在Stun变换的情况下，判断Port是否有改变（Port-Restricted Cone NAT）
+       - Stun变换的情况下，都变了（Symmetric NAT）
+
+   11. 使用udp开启监听，占据端口
+
+   12. 返回结果
+
+3. 
+
+
+
+##### NewProxyResp
+
+##### NatHoleResp
+
+##### Pong
+
+
+
+
+
+
 
 
 
@@ -1635,4 +1831,80 @@ _ = pw.handler(&event.StartProxyPayload{
 
 
 #### 启动Visitor
+
+
+
+
+
+### stun测试代码
+
+```go
+
+func main() {
+	stuns := []string{"stun.l.google.com:19302", "stun1.l.google.com:19302"}
+	var local *net.UDPAddr
+	conn, err := net.ListenUDP("udp4", local)
+	if err != nil {
+		panic(err)
+	}
+	messageChan := make(chan *stun.Message, 1)
+	go func() {
+		for {
+			buf := make([]byte, 1024)
+			n, addr, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			buf = buf[:n]
+			var m stun.Message
+			m.Raw = buf
+			if err := m.Decode(); err != nil {
+				panic(err)
+			}
+			fmt.Println(addr.String())
+			messageChan <- &m
+		}
+	}()
+
+	for _, stunServer := range stuns {
+		serverAddr, err := net.ResolveUDPAddr("udp4", stunServer)
+		if err != nil {
+			panic(err)
+		}
+
+		request, err := stun.Build(stun.TransactionID, stun.BindingRequest)
+		if err != nil {
+			panic(err)
+		}
+
+		if err = request.NewTransactionID(); err != nil {
+			panic(err)
+		}
+
+		if _, err := conn.WriteTo(request.Raw, serverAddr); err != nil {
+			panic(err)
+		}
+		// wait data
+		msg := <-messageChan
+		xorAddrGetter := &stun.XORMappedAddress{}
+		mappedAddrGetter := &stun.MappedAddress{}
+		ChangedAddress := &stun.MappedAddress{}
+		otherAddrGetter := &stun.OtherAddress{}
+
+		if err := mappedAddrGetter.GetFrom(msg); err == nil {
+			fmt.Println("mapped", mappedAddrGetter.String())
+		}
+		if err := xorAddrGetter.GetFrom(msg); err == nil {
+			fmt.Println("xor", xorAddrGetter.String())
+		}
+		if err := ChangedAddress.GetFromAs(msg, stun.AttrChangedAddress); err == nil {
+			fmt.Println("changed", ChangedAddress.String())
+		}
+		if err := otherAddrGetter.GetFrom(msg); err == nil {
+			fmt.Println("other", otherAddrGetter.String())
+		}
+
+	}
+}
+```
 
