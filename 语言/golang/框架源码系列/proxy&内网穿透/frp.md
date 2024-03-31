@@ -155,6 +155,65 @@ func main(){
 
 
 
+### 总结
+
+FRP的实现代码上看起来很复杂，实际上很简单。
+
+#### 服务端简介
+
+服务端就是Service做做开始的客户端接入，接入后转Control进行管理，并使用msgDispatcher进行信息的转发与处理（此处设计为：使用map+反射注册每个消息的处理方式），然后Control拥有Service的ResourceController管理权限（可以在服务端上创建监听端口）。
+
+后续就是通过Control对client的监听，根据client发出的请求（msg.NewProxy），生成对应的Proxy，或做其他的处理（msg.Ping）来保活。
+
+其余关于代理的具体实现就是在服务器上创建对应Proxy，当来了请求，转发即可。
+
+以TCP为例，TCP服务端并不需要做什么操作，基本就封装了一个Dial（可对数据包进行加密、压缩、限速），然后利用io.Copy将双方链接绑定（visitor与client）。
+
+UDP可能略微有所不同（粗略看，好像设计时考虑比较多，不是单纯的把udp数据转到client上），其余没细看。
+
+#### 客户端简介
+
+与Server端并无大致的差异，设计也是拆封成类似上层。
+
+一个Service用于管理Control和电脑的资源
+
+一个Control用于管理与服务器建立的链接，并监听处理响应的信息。并对数据进行
+
+一个msgDispatcher用于处理链接的消息处理。
+
+#### xtcp简介（P2P）
+
+打洞逻辑也不复杂，就是写的我有点看不懂。（也可能是我网络类型见的太少了）。
+
+简单来说就是以下几点，他没有确定具体的打洞操作或如何。他通过STUN服务返回的地址，判断自己的打洞操作：
+
+1. 是不是公网？ 
+2. 在内网监听ip:port不变的情况下，不同STUN服务器下，IP与端口都没变化（定义为 Easy Nat）
+3. 在内网监听ip:port不变的情况下，不同STUN服务器下，IP没有变化（换端口了，定义为 HARD NAT，并判断端口变换是否规则（在5以内））
+4. 在内网监听ip:port不变的情况下，不同STUN服务器下，端口没有变化（换IP了，定义为 HARD NAT）
+
+并对上述情况做出打洞的推荐，分成了几个打洞行为，称之为mode0, mode1, mode2, mode3, mode4。
+
+每个mode都有对应的操作。（具体看[打洞建议行为](#####打洞建议行为)）。
+
+后将对应操作返回给client，client将开始尝试上述的打洞建议行为。如果打通，则保持链接。如果没打通，则失败。
+
+可能大多数操作都是为了兼顾NAT4而实现（在NAT4下，映射的端口、甚至IP可能都不一致），所以有各种的rangePort，randomPort操作。
+
+NAT2与NAT3下，主要依靠STUN服务器返回的质量（或者说STUN部署的数量，决定打洞成功度）。
+
+[参考文章&图源](https://blog.csdn.net/yangowen/article/details/125787199)
+
+![img](E:\note\语言\golang\框架源码系列\proxy&内网穿透\frp.assets\各NAT IP端口映射表.png)
+
+
+
+
+
+
+
+-----
+
 ### frps
 
 #### 结构体简介
@@ -776,7 +835,7 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
 
 暂略
 
-###### NatHoleVisitor
+###### NatHoleVisitor【xtcp重点，前置阅读[代理处理->xtcp](######xtcp（重点）)】
 
 当前是用于处理访问者的（我们都知道，P2P是需要双端都有支持的（客户端A，客户端B），当客户端B想访问客户端A时，在FRP的定义中就是Visitor，此处即为代码：
 
@@ -841,14 +900,44 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
          3. 同时，上述步骤会对每个操作进行基础评分（公网IP为1，其他类型皆为0）
          4. 后续将根据最大分值，优先执行某些操作。
          5. 将上述获取到的所有模式，作为`scores`变量，返回，保存到当前`Control.analyzer.records`中
+         
       2. 获取最高分的打洞建议（通常是批量的 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L234-L247)
+      
       3. 获取当前执行到的行为
-      4. 根据网络难度，决定谁是发送者，谁是接收者[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L283-L299)
-         - 通常而言，更复杂的NAT类型作为发送者更好打通
-      5. 返回`msg.NatHoleResp`消息体给双方客户端
-
+      
+   4. 根据网络难度，决定谁是发送者，谁是接收者[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L283-L299)
+         
+      - 通常而言，更复杂的NAT类型作为发送者更好打通
+         
+      5. 整理msg.NatHoleResp [代码](https://github.com/fatedier/frp/blob/590ccda677afef39763e225fb777c3b2bf0ef4c7/pkg/nathole/controller.go#L327C2-L343C3)
+      
+         ```go
+         vResp := &msg.NatHoleResp{
+             TransactionID:  vm.TransactionID, // 
+             Sid:            session.sid,
+             Protocol:       protocol,
+             CandidateAddrs: slices.Compact(cm.MappedAddrs), // 
+             AssistedAddrs:  slices.Compact(cm.AssistedAddrs),
+             DetectBehavior: msg.NatHoleDetectBehavior{
+                 Mode:              mode, // 
+                 Role:              vBehavior.Role, // sender or reciver 
+                 TTL:               vBehavior.TTL, // 心跳包
+                 SendDelayMs:       vBehavior.SendDelayMs, // 延迟
+                 ReadTimeoutMs:     timeoutMs - vBehavior.SendDelayMs, // 超时延迟
+                 SendRandomPorts:   vBehavior.PortsRandomNumber, // 发送端口
+                 ListenRandomPorts: vBehavior.ListenRandomPorts, // 监听端口 
+                 // 候选者端口（因部分限制的情况下端口会不同）从而假设他的端口变化范围。
+                 CandidatePorts:    getRangePorts(cm.MappedAddrs, cNatFeature.PortsDifference, vBehavior.PortsRangeNumber),
+             },
+         }
+         ```
+      
+         - [getRangePorts](https://github.com/fatedier/frp/blob/590ccda677afef39763e225fb777c3b2bf0ef4c7/pkg/nathole/controller.go#L368C1-L392C2)
+      
+      6. 返回`msg.NatHoleResp`消息体给双方客户端
+   
    到这里，NatHoleVisitor 消息就已经执行完毕了，剩下需从Client看起。
-
+   
    
 
 ###### NatHoleClient
@@ -1395,9 +1484,11 @@ keepTunnelOpen = false
 
 *// mode 0, both EasyNAT, PublicNetwork is always receiver*
 
-- 
-
 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L27-L49)
+
+- 由于是公网IP，所以设置正常发信，设置超时，不需要建立NAT规则
+
+-----
 
 ###### 模式1
 
@@ -1405,11 +1496,22 @@ keepTunnelOpen = false
 
 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L51-L65)
 
+- 接收者需要往候选者的映射端口 port+- 10范围内的端口发包
+  - （因为NAT映射出来的端口不一定准确，发包操作是为了建立一条NAT规则，避免NAT设备丢弃）
+  - 同时由于是规则形的NAT，他的端口可被预测到，此处预测阈值就为10.
+
+-----
+
 ###### 模式2
 
 *// mode 2, HardNAT is receiver, EasyNAT is sender*
 
 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L67-L84)
+
+- 发送者，随机1000个端口进行发信
+- 接收者，随机256个端口进行监听
+
+-----
 
 ###### 模式3
 
@@ -1417,15 +1519,21 @@ keepTunnelOpen = false
 
 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L86-L100)
 
+- 接收者需要往发送者的映射端口 port+- 10范围内的端口发包
+- 发送者也需要往接收者映射端口 port+- 10范围内的端口发包
+
+-----
+
 ###### 模式4
 
 *// mode 4, Regular ports changes are usually the sender.*
 
 [代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L102-L119)
 
+- 发送者随机生成1000个port，用于往接收者发信
+- 接收者随机监听256个端口
 
-
-
+-----
 
 ### fpc
 
@@ -1802,35 +1910,68 @@ reqWorkConn，是server向client索要新连接，我们来看看上述具体执
 
    12. 返回结果
 
-3. 
+3. 随机生成TransactionID
+
+4. 将第二步收集的信息上报服务器，并同时等待服务器响应处理操作数据。
+
+   服务器响应
+
+   ```go
+   type NatHoleResp struct {
+   	TransactionID  string                `json:"transaction_id,omitempty"`
+   	Sid            string                `json:"sid,omitempty"`
+   	Protocol       string                `json:"protocol,omitempty"`
+   	CandidateAddrs []string              `json:"candidate_addrs,omitempty"` // 候选者外网地址
+   	AssistedAddrs  []string              `json:"assisted_addrs,omitempty"` // 候选者监听地址
+   	DetectBehavior NatHoleDetectBehavior `json:"detect_behavior,omitempty"` // 操作行为
+   	Error          string                `json:"error,omitempty"`
+   }
+   type NatHoleDetectBehavior struct {
+   	Role              string       `json:"role,omitempty"` // sender or receiver
+   	Mode              int          `json:"mode,omitempty"` // 0, 1, 2...
+   	TTL               int          `json:"ttl,omitempty"` 
+   	SendDelayMs       int          `json:"send_delay_ms,omitempty"`
+   	ReadTimeoutMs     int          `json:"read_timeout,omitempty"`
+   	CandidatePorts    []PortsRange `json:"candidate_ports,omitempty"` // 候选者端口（可能是为了NAT4）
+   	SendRandomPorts   int          `json:"send_random_ports,omitempty"`
+   	ListenRandomPorts int          `json:"listen_random_ports,omitempty"`
+   }
+   ```
+
+5. 调用[`nathole.MakeHole`](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/nathole.go#L180-L277) 
+
+   1. 判断自己的角色是什么（发送者或接收者）
+      - 发送者则将对方本地监听与candidate（对端NAT映射的外网地址）的Addr存放到`detectAddrs`中
+      - 接收者则将对方映射的Addrs添加到detect中
+        - 如果映射出去的端口不稳定（NAT4），则随机生成多个UDP链接进行监听，并添加到`listenConns`中。
+   2. 遍历所有的`detectAddrs` 并使用`listenConns`中的所有链接发送消息（尝试打通）[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/nathole.go#L323-L373)
+   3. 如果候选端口>0，则遍历所有端口，拼接具体candidate的ip地址后，往该地址发送相应的udp包。（考虑NAT4？）[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/nathole.go#L223C2-L227C3)
+      - 例如：往1.1.1.1:18000~1.1.1.1:19000发包
+   4. 如果发送随机端口>0，则随机生成该数量的udp端口，并使用该addr发包（考虑NAT4？）
+   5. 等待对方响应。（正常来讲对方也是进行上述操作，发一堆包，然后当我方监听端口接收到预期请求，那么就认为是打通了）[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/nathole.go#L279-L321)
+   6. 打通了就返回
+
+6. 上报打通信息到server `msg.NatHoleReport` 
+
+7. 根据协议，决定启用kcp或quic
 
 
 
 ##### NewProxyResp
 
-##### NatHoleResp
+略
 
 ##### Pong
 
+略
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-服务器所发来的消息都是通过此处做的代理。
 
 
 
 #### 启动Visitor
+
+略
 
 
 
