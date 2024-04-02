@@ -159,6 +159,57 @@ func main(){
 
 FRP的实现代码上看起来很复杂，实际上很简单。
 
+```sequence
+Title: Here is xtcp operation
+participant client 
+participant server
+participant visitor 
+
+client->server: 申请登陆登陆（msg.Login）
+server-->server: 维持client链接
+server-->client: 登录成功
+client-->client: 维持相应链接
+client->server: 申请开启代理（msg.NewProxy）
+server-->server: 尝试开启代理（Proxy）
+server->client: 开启成功
+
+note over client,visitor: xtcp访问逻辑 visitor部分
+visitor->server: 申请登陆（msg.Login）
+server-->server: 维持visitor链接
+server-->visitor: 登录成功
+visitor-->visitor: 维持相应链接
+visitor-->visitor: 收集STUN信息
+visitor->server: 申请打洞（msg.NatHoleVisitor），建立sid
+server->client: 往维持的client链接发送消息sid
+client-->client: 收集打洞信息
+client->server: 发送（msg.NatHoleClient）
+server-->server: 根据client与visitor的打洞信息分析。
+Note right of server: 分析各端的NAT类型
+Note right of server: 决定谁是接收者，谁是发送者
+Note right of server: 生成相应建议操作，区分sender和reciver
+Note right of server: 本地随机端口，远程批量端口，目标访问端口等
+server-->client: 请做xxx操作（msg.NatHoleResp）
+server-->visitor: 请做xxx操作（msg.NatHoleResp）
+
+Note over client,visitor: xtcp打洞操作，根据server返回操作开始执行
+Note over client,visitor: 此处假定client是receiver, visitor是sender
+Note right of client: 此处操作根据服务端返回实现
+Note right of client: 详情可看"打洞建议行为（mode）"
+client->visitor: 按照server返回操作，发送udp包，用于探测，并建立NAT记录。
+visitor->client: 按照server返回操作，发送udp包，用于探测，并建立NAT记录。
+client-->client: 接收到visitor请求，内部处理
+client-->visitor: 收到包了，回复(msg.NatHoleSid)
+client-->client: 链接使用quic或kcp协议
+visitor-->visitor: 链接使用quic或kcp协议
+
+
+
+
+
+```
+
+
+
 #### 服务端简介
 
 服务端就是Service做做开始的客户端接入，接入后转Control进行管理，并使用msgDispatcher进行信息的转发与处理（此处设计为：使用map+反射注册每个消息的处理方式），然后Control拥有Service的ResourceController管理权限（可以在服务端上创建监听端口）。
@@ -906,9 +957,9 @@ func (ctl *Control) handleNewProxy(m msg.Message) {
       3. 获取当前执行到的行为
       
    4. 根据网络难度，决定谁是发送者，谁是接收者[代码](https://github.com/fatedier/frp/blob/acf33db4e4b6c9cf9182d93280299010637b6324/pkg/nathole/analysis.go#L283-L299)
-         
+      
       - 通常而言，更复杂的NAT类型作为发送者更好打通
-         
+        
       5. 整理msg.NatHoleResp [代码](https://github.com/fatedier/frp/blob/590ccda677afef39763e225fb777c3b2bf0ef4c7/pkg/nathole/controller.go#L327C2-L343C3)
       
          ```go
