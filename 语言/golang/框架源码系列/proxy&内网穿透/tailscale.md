@@ -197,13 +197,134 @@ Subcommands: []*ffcli.Command{
 我们主要关注几个
 
 - upCmd
-  - 创建虚拟网卡，登陆
+  - [loginCmd](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscale/cli/login.go#L15-L31) 也是使用此底层命令（具体为runUp
+  - 创建虚拟网卡，登录
 - downCmd
   - 关闭tailscale，关闭网卡
 - statusCmd
   - 输出当前tailscale状态，可以看到IP信息，对端客户端，以及如果建立了链接，其是中转还是打洞。
 
-此处我们先看upCmd（其中应该是也包含了loginCmd的相关操作），这个操作也是
+此处我们先看upCmd。
+
+其就是调用了[`runUp`](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscale/cli/up.go#L391-L643)（在login也是调用此方法）
+
+此处tailscaled也被命名为守护进程（个人定义，方便称呼）（d=daemon）
+
+1. 检查本地tailscaled状态
+   - 其实就是往本地的tailscaled发送一个HTTP请求
+     - GET /localapi/v0/status 
+       - 直接通过sock发送请求，"local-tailscaled.sock"
+     - 守护进程返回[Status](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnstate/ipnstate.go#L31-L84)
+2. 过滤设备：[群晖不支持一些操作](https://github.com/tailscale/tailscale/issues/1995)
+3. 校验配置文件，并隐藏变量域 [prefsFromUpArgs](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscale/cli/up.go#L228-L311)
+4. 从守护进程获取[Prefs](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/prefs.go#L51-L238)
+   - GET /localapi/v0/prefs
+5. 如果是up命令，则将守护进程的ProfileName覆盖当前客户端参数的ProfileName.
+6. 解析配置文件 ，分出具体的情况[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscale/cli/up.go#L313-L379)
+   - 是否只是SimpleUp?
+   - 是否只改变不需要重启生效的参数JustEditMP？
+7. 如果是justEditMP，则直接调用客户端，修改配置。[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscale/cli/up.go#L472-L476)
+   - PATCH /localapi/v0/prefs
+8. 挂了个[`WatchIPNBus`](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/client/tailscale/localclient.go#L1373-L1404)，暂不知其意
+   - GET /localapi/v0/watch-ipn-bus?mask=0
+9. 中间跳过一段，暂时没看懂。[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscale/cli/up.go#L503-L572)
+   - 与WatchIPNBus相关，看着是什么登录处理？
+   - 可能是把客户端的一些up操作改为了流程式的实现？
+     - 比如，登录可能分为几步，但当前只完成了第一步，还需要等待第二步。
+     - 此处可能就封装了一个能.Next().Next()的Iterator模式的调用？直到登录成功？
+   - 调用了 startLoginInteractive
+     - POST /localapi/v0/login-interactive
+10. 判断是否是simpleUp
+    - 如果是，则修改一些配置。[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscale/cli/up.go#L577-L585)
+    - 如果不是，则从获取authKey开始[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscale/cli/up.go#L587-L607)
+      - 调用start
+        - POST /localapi/v0/start
+        - 传入启动参数以及Authkey
+11. 等待服务改变为running
+12. 结束登录
+
+上述就是upCmd的全过程，其中结束时我们可以看到这么一段表述
+
+```go
+// This whole 'up' mechanism is too complicated and results in
+// hairy stuff like this select. We're ultimately waiting for
+// 'running' to be done, but even in the case where
+// it succeeds, other parts may shut down concurrently so we
+// need to prioritize reads from 'running' if it's
+// readable; its send does happen before the pump mechanism
+// shuts down. (Issue 2333)
+```
+
+#### 简述
+
+我们也可以看到，其up命令的实现是蛮复杂的：
+
+1. 首先判断你守护进程状态，如果你开启着，则将守护进程的配置拉下来，与当前运行的命令进行对比。
+   1. 如果开启了，并且配置一致，或仅产生一些简单变更参数（在该参数不需要重启的情况下），将直接更新参数
+   2. 如果没有开启，则判断是否是简单启动
+   3. 如果不是，则需要处理登录操作逻辑有没有登录。
+      - 由于登录蛮复杂的，所以此处实现也蛮复杂。	
+      - 它支持客户端在没有密钥的情况下申请登录到服务端中，但需服务端批准，所以此处实现为了状态模式，不同状态此处也会有不同的处理。
+2. 等待操作结束，告知running
+
+-----
+
+
+
+### tailscaled
+
+作为tailscale客户端部分的服务器（或是守护进程）。所有操作其实都是在tailscaled部分进行，tailscale仅是一个命令行的客户端，便于用户登录操作，不需要用户去记住请求以及交互流程等。如果提供到服务级别，可能仅需要开个Web服务器，做一个web服务的封装即可。（有桌面gui应用更佳）
+
+在上述代码中，我们其实已经看到了，他在up流程中使用了多个API。
+
+1. 查看状态 GET /localapi/v0/status 
+2. 获取当前运行的配置文件（或首选项） GET /localapi/v0/prefs
+3. 疑似让用户登录的？ GET /localapi/v0/watch-ipn-bus?mask=0
+   - POST /localapi/v0/login-interactive
+4. 启动的 POST /localapi/v0/start
+
+调用流程就是这样，我们直接从这几个API看起，与上述关联起来。
+
+我们通过全局搜索`/localapia/v0` （因为没搜到`/localapi/v0/status`，所以想尝试删除，看看能不能匹配到前半段部分）搜索到此部分，[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/localapi/localapi.go#L75-L143) 其中注册了许多Handler方法。
+
+我们回溯到源头，其实在tailscaled.go文件中进行的调用[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscaled/tailscaled.go#L487)
+
+#### status
+
+上述初始化咱们暂时就不看了，直接从status状态开始看起实现
+
+```go
+func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "status access denied", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	var st *ipnstate.Status
+	if defBool(r.FormValue("peers"), true) {
+		st = h.b.Status()
+	} else {
+		st = h.b.StatusWithoutPeers()
+	}
+	e := json.NewEncoder(w)
+	e.SetIndent("", "\t")
+	e.Encode(st)
+}
+```
+
+我们最开始调用时并没有传入任何参数，所以这里的值为`""`，`defBool`方法判断peers是否为空，如果为空则使用第二个传入值，所以此处为true。
+
+
+
+#### prefs
+
+#### watch-ipn-bus
+
+#### login-interactive
+
+#### start
+
+
 
 
 
