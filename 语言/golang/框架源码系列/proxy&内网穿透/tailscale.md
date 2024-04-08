@@ -289,6 +289,8 @@ Subcommands: []*ffcli.Command{
 
 我们回溯到源头，其实在tailscaled.go文件中进行的调用[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscaled/tailscaled.go#L487)
 
+我这里只好奇两个，一个status，一个start，猜测status用于展露状态，start用于开启代理（此部分应该是tailscaled的核心代码）
+
 #### status
 
 上述初始化咱们暂时就不看了，直接从status状态开始看起实现
@@ -314,9 +316,55 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 
 我们最开始调用时并没有传入任何参数，所以这里的值为`""`，`defBool`方法判断peers是否为空，如果为空则使用第二个传入值，所以此处为true。
 
+走 [`h.b.Status()`](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnlocal/local.go#L726-L730) 方法，其调用[`UpdateStatus()`](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnlocal/local.go#L741-L860)方法去读取具体的状态。
+
+可能因为[Status](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnstate/ipnstate.go#L31-L84)传入值比较多，这里使用的是[Builder](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnstate/ipnstate.go#L321-L329)设计模式。
+
+1. 加载状态 [Status](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnstate/ipnstate.go#L31-L84)
+
+   | Name           |                                                              |                                                              |
+   | -------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+   | Version        | string                                                       | 版本                                                         |
+   | TUN            | bool                                                         |                                                              |
+   | BackendState   | string                                                       | 守护进程状态：<br/>"NoState"<br/>"InUseOtherUser"<br/>"NeedsLogin"<br/>"NeedsMachineAuth"<br/>"Stopped"<br/>"Starting"<br/>"Running" |
+   | AuthURL        | string                                                       | 验证地址的复制链接（复制到服务端直接执行的）                 |
+   | ClientVersion  | [ClientVersion](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/tailcfg/tailcfg.go#L1902-L1932) | 客户端版本信息（最后运行版本，最新版本，紧急安全更新，...)   |
+   | Health         | []string                                                     | 版本更新提醒、守护进程错误信息、以及各种警告信息（报错信息也在此列） |
+   | CertDomains    | string                                                       | DNS证书                                                      |
+   | CurrentTailnet | [TailnetStatus](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnstate/ipnstate.go#L151-L167) | 域名以及DNS服务                                              |
+
+2. 加载私有状态 [ipnstate.PeerStatus](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnstate/ipnstate.go#L208-L309)
+
+   | Name          |                                                              |              |
+   | ------------- | ------------------------------------------------------------ | ------------ |
+   | OS            | string                                                       | 系统名       |
+   | Online        | bool                                                         | 在线状态     |
+   | HostName      | string                                                       |              |
+   | DNSName       | string                                                       |              |
+   | UserID        | ID (int64)                                                   | 用户ID       |
+   | PublicKey     | [NodePublic](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/types/key/node.go#L154-L157) | 公钥         |
+   | PrimaryRoutes | [views.Slice[netip.Prefix]](views.Slice[netip.Prefix])  ([]Prefix) | 私有路由     |
+   | AllowedIPs    | [views.Slice[netip.Prefix]](views.Slice[netip.Prefix])  ([]Prefix) | 允许访问的IP |
+   | Expired       | bool                                                         | 是否过期     |
+   | KeyExpiry     | time.Time                                                    | 密钥过期时间 |
+
+3. 读取其他节点状态（同服务器下或称同ACL规则内？）
+
+   1. 读取用户配置 [UserProfile](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/types/netmap/netmap.go#L79) 
+   2. 遍历所有节点
+      1. 最后在线时间
+      2. tailscale的ip列表
+      3. 在线信息
+      4. 以及加载该节点的私有状态
+      5. 将当前节点信息添加到Builder中
+
+4. 完成Status读取
+
 
 
 #### prefs
+
+
 
 #### watch-ipn-bus
 
