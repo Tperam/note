@@ -364,13 +364,51 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 
 #### prefs
 
-
+略，用于配置文件的
 
 #### watch-ipn-bus
 
+略，后续可补看
+
 #### login-interactive
 
+略
+
 #### start
+
+路由[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/localapi/localapi.go#L121)在此
+
+我们往里走，看具体的请求处理
+
+先从http的Body中读取了[Options](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/backend.go#L232-L251)结构体
+
+该结构体如下，与[Prefs](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/prefs.go#L50-L238)结构体
+
+```go
+type Options struct {
+	// FrontendLogID is the public logtail id used by the frontend.
+	FrontendLogID string
+	// LegacyMigrationPrefs are used to migrate preferences from the
+	// frontend to the backend.
+	// If non-nil, they are imported as a new profile.
+	LegacyMigrationPrefs *Prefs `json:"Prefs"`
+	// UpdatePrefs, if provided, overrides Options.LegacyMigrationPrefs
+	// *and* the Prefs already stored in the backend state, *except* for
+	// the Persist member. If you just want to provide prefs, this is
+	// probably what you want.
+	//
+	// TODO(apenwarr): Rename this to Prefs, and possibly move Prefs.Persist
+	//   elsewhere entirely (as it always should have been). Or, move the
+	//   fancy state migration stuff out of Start().
+	UpdatePrefs *Prefs
+	// AuthKey is an optional node auth key used to authorize a
+	// new node key without user interaction.
+	AuthKey string
+}
+
+```
+
+再将请求传给[LocalBackend.Start](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnlocal/local.go#L1619-L1870)
 
 
 
