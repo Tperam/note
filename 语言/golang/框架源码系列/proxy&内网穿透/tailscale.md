@@ -410,15 +410,38 @@ type Options struct {
 
 再将请求传给[LocalBackend.Start](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnlocal/local.go#L1619-L1870)
 
+Start包揽了所有启动相关的操作，我们针对此进行阅读。
+
+-----
 
 
 
+上面的版本过于复杂了，不看了。看他第一版，估计也实现了相应功能，就是可能有点Bug。
+
+咱们换到v0.96，最老tag版本的handler方法起看：[handler](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/ipn/localapi/localapi.go#L72-L144)。
+
+依旧很熟悉的map路由表
+
+依旧熟悉的ipn.Options + Start操作
+
+嗯，代码看似简单了点，但好像也没简单到哪里去...。
+
+好，此处二次放弃！
 
 
 
+-----
 
 
 
+想了想，直接放弃好像有点可惜，不看到他P2P的实现真的很苦恼，现在有几条路子：
+
+1. 直接debug打断点+tailscale运行看实际流程（要自己搭建各种测试环境）
+2. 看Blog有没有对代码的解释和说明，如果没有，那就看看他blog中对P2P实现的描述，假装自己已经读过源码
+3. 玩点骚的，根据命名，以及大致行为，猜测其可能的功能
+   - 比如我现在就有怀疑对象，他的LocalBackend应该是贯穿全局的结构体，各个地方都会修改它
+     - 它里面的netMap可能就是管理节点的
+     - peer什么的估计也是相关的
 
 
 
