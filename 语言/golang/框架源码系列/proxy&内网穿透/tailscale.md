@@ -414,25 +414,31 @@ Start包揽了所有启动相关的操作，我们针对此进行阅读。
 
 -----
 
+### tailscaled v0.96
+
+> 上面的版本过于复杂了，不看了。看他第一版，估计也实现了相应功能，就是可能有点Bug。
+>
+> 咱们换到v0.96，最老tag版本的handler方法起看：[handler](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/ipn/localapi/localapi.go#L72-L144)。
+>
+> 依旧很熟悉的map路由表
+>
+> 依旧熟悉的ipn.Options + Start操作
+>
+> 嗯，代码看似简单了点，但好像也没简单到哪里去...。
+>
+> 好，此处二次放弃！
 
 
-上面的版本过于复杂了，不看了。看他第一版，估计也实现了相应功能，就是可能有点Bug。
 
-咱们换到v0.96，最老tag版本的handler方法起看：[handler](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/ipn/localapi/localapi.go#L72-L144)。
+好的，突然发现我原先down了源码忘记换分支了，跟着这个思路再走一遍看看。
 
-依旧很熟悉的map路由表
 
-依旧熟悉的ipn.Options + Start操作
-
-嗯，代码看似简单了点，但好像也没简单到哪里去...。
-
-好，此处二次放弃！
 
 
 
 -----
 
-
+### tailscaled 源码阅读其他方式
 
 想了想，直接放弃好像有点可惜，不看到他P2P的实现真的很苦恼，现在有几条路子：
 
@@ -442,8 +448,6 @@ Start包揽了所有启动相关的操作，我们针对此进行阅读。
    - 比如我现在就有怀疑对象，他的LocalBackend应该是贯穿全局的结构体，各个地方都会修改它
      - 它里面的netMap可能就是管理节点的
      - peer什么的估计也是相关的
-
-
 
 
 
