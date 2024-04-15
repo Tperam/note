@@ -285,9 +285,38 @@ Subcommands: []*ffcli.Command{
 
 调用流程就是这样，我们直接从这几个API看起，与上述关联起来。
 
-我们通过全局搜索`/localapia/v0` （因为没搜到`/localapi/v0/status`，所以想尝试删除，看看能不能匹配到前半段部分）搜索到此部分，[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/localapi/localapi.go#L75-L143) 其中注册了许多Handler方法。
+我们通过全局搜索`/localapi/v0` （因为没搜到`/localapi/v0/status`，所以想尝试删除，看看能不能匹配到前半段部分）搜索到此部分，[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/localapi/localapi.go#L75-L143) 其中注册了许多Handler方法。
 
 我们回溯到源头，其实在tailscaled.go文件中进行的调用[代码](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscaled/tailscaled.go#L487)
+
+调用过程：
+
+1. main.go run
+
+2. 调用 [startIPNServer](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscaled/tailscaled.go#L412)
+
+3. 调用 [srv.Run](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/cmd/tailscaled/tailscaled.go#L487)
+
+4. 配置了[hs作为http.Server](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnserver/server.go#L543-L562)，这里主要看[Handler](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnserver/server.go#L544)参数
+
+5. 其传入的[serveHTTP](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/ipnserver/server.go#L149-L224)，判断了URL的前缀。我们所关注的前缀刚好是`/localapi/`，所以我们看此处的lah.ServeHTTP
+
+   ```go
+   if strings.HasPrefix(r.URL.Path, "/localapi/") {
+       lah := localapi.NewHandler(lb, s.logf, s.netMon, s.backendLogID)
+       lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
+       lah.PermitCert = s.connCanFetchCerts(ci)
+       lah.ConnIdentity = ci
+       lah.ServeHTTP(w, r)
+       return
+   }
+   ```
+
+6. [lah.ServeHTTP](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/localapi/localapi.go#L194-L227) 其中调用了[handleForPath](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/localapi/localapi.go#L222)
+
+7. 最终在handleForPath中找到了[handler](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19/ipn/localapi/localapi.go#L270)这个Map，其指向了最终的每个路径的处理方法。
+
+
 
 我这里只好奇两个，一个status，一个start，猜测status用于展露状态，start用于开启代理（此部分应该是tailscaled的核心代码）
 
@@ -434,11 +463,259 @@ Start包揽了所有启动相关的操作，我们针对此进行阅读。
 
 
 
+#### wireguard
+
+ok 我们现在看了个wireguard的逻辑（暂时没测试，知道了以下流程）
+
+- wireguard 配置
+  - 需要配置一个私钥与公钥（有命令直接生成）
+  - 在两台机器上互相配置对方的公钥
+  - 配置allowed-ips
+  - 配置endpoint（对方机器的代理点？）
+  - 两台机器上自己配置自己的IP
+- wireguard会本地生成一个虚拟网卡
+  - 本地会有个服务将所有发往虚拟网卡的包都拦截下来
+  - 此处根据对方的pubkey进行加密
+  - 并使用UDP往配置的endpoint中发送包
+- 对方监听endpoint，收到包后使用当前的privatekey
+  - 若解包成功，则根据allowed ip 判断是否需要处理该包
+  - 若匹配，则直接发给源包的dst.ip与dst.port
+  - 若不匹配，则丢弃
+
+当前tailscaled宣称是基于wireguard的。
+
+所以其实tailscale所作的事情就是维护 wireguard 
+
+1. 私钥+密钥 的传输（原先需要用户配置）
+2. endpoint的配置
+   - 此处就是内网穿透的核心了（此处都是tailscale所需要做的）
+   - 需要通过一系列的打洞操作，确定双方客户端最终暴露在公网的endpoint
+   - 测试通过后，再来wireguard中固定下来
+3. allowed ip 的配置
+
+所以我们只需要看tailscale的上述操作，并且其中1，多半是通过服务器转发得到的，我们不需要特别关注。3又仅是服务器的配置下发实现。
+
+所以我们主要关注的还是endpoint的获取，这里应该就是tailscale的实际操作。
+
+-----
+
+定义：
+
+- 新版本为 [版本](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19)
+
+#### tailscale
+
+v0.96的版本与之前看的[版本](https://github.com/tailscale/tailscale/blob/ec87e219ae8828f74448c74a7026016a8b037a19)差距比较大，我们从[tailscale.go](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/cmd/tailscale/tailscale.go)快速看起。
+
+从这里可以看到，当前已经有up命令了。我们直接看他的执行
+
+```go
+upCmd := &ffcli.Command{
+		Name:       "up",
+		ShortUsage: "up [flags]",
+		ShortHelp:  "Connect to your Tailscale network",
+
+		LongHelp: strings.TrimSpace(`
+"tailscale up" connects this machine to your Tailscale network,
+triggering authentication if necessary.
+
+The flags passed to this command set tailscaled options that are
+specific to this machine, such as whether to advertise some routes to
+other nodes in the Tailscale network. If you don't specify any flags,
+options are reset to their default.
+`),
+		FlagSet: upf,
+		Exec:    runUp,
+	}
+```
+
+[runUp](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/cmd/tailscale/tailscale.go#L120-L204)方法
+
+```go
+func runUp(ctx context.Context, args []string) error {
+	// ... 省略代码...
+	c, err := safesocket.Connect(upArgs.socket, 0)
+	if err != nil {
+		log.Fatalf("safesocket.Connect: %v\n", err)
+	}
+    // 客户端发信到守护进程
+	clientToServer := func(b []byte) {
+        // 可能定义了协议头等
+		ipn.WriteMsg(c, b)
+	}
+	// ... 优雅处理错误省略 ... 
+	bc := ipn.NewBackendClient(log.Printf, clientToServer)
+	bc.SetPrefs(prefs)
+	opts := ipn.Options{
+		StateKey: globalStateKey,
+        // ... opts配置省略 ...
+		},
+	}
+	// We still have to Start right now because it's the only way to
+	// set up notifications and whatnot. This causes a bunch of churn
+	// every time the CLI touches anything.
+	//
+	// TODO(danderson): redo the frontend/backend API to assume
+	// ephemeral frontends that read/modify/write state, once
+	// Windows/Mac state is moved into backend.
+	bc.Start(opts)
+	pump(ctx, bc, c)
+
+	return nil
+}
+```
+
+我们可以看到，他在[代码中](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/cmd/tailscale/tailscale.go#L200)直接调用了bc.Start，现在看当时的设计并没有使用http相关，完全使用的是tcp，
+
+其定义了一个Command，用于与服务器沟通，我们bc.Start就是将opts给了Command.Start后，直接发信给服务器。
+
+```go
+// ... 
+bc.send(Command{Start: &StartArgs{Opts: opts}})
+// ...
+type Command struct {
+	Version string
+
+	// Exactly one of the following must be non-nil.
+	Quit                  *NoArgs
+	Start                 *StartArgs
+	StartLoginInteractive *NoArgs
+	Logout                *NoArgs
+	SetPrefs              *SetPrefsArgs
+	RequestEngineStatus   *NoArgs
+	FakeExpireAfter       *FakeExpireAfterArgs
+}
+```
+
+
+
+#### taiscaled
+
+由于调用状态与新版不是很一致（新版http，当前tcp）。说明改了很多地方，我们之前使用的搜索Url方法失效了。但由于有之前看代码的经验，有一定的关键字累积，所以我们瞄准其对应关键字：LocalBackend, peer(wireguard), endpoint(wireguard), 以及netMap。
+
+>  我们在新版本的地方也看到了，其ipnserver就是用来处理从tailscale发送上来的请求，所以我们在main 中看到了 ipnserver.Run，就直接对着他往下找
+
+main方法中调用[ipnserver.Run](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/cmd/tailscaled/tailscaled.go#L87)
+
+1. 其监听了一个启动时传递的socketPath，（若没传递，默认路径`/var/run/tailscale/tailscaled.sock`）
+2. 其直接在[这里](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/ipnserver/server.go#L158-L183)做了请求的接收，当tailscale发起请求，则会触发此Accept
+3. 这里调用了[pump](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/ipnserver/server.go#L173)，将接收到的请求直接传递进去并处理。
+   1. pump里面实现其实非常简单，就是调用ipn.readMsg，将整个消息读出，读到[]byte
+   2. 后调用[bs.GotCommandMsg](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/ipnserver/server.go#L71)，将[]byte 传递进去处理（此处实现感觉不如frp一根毛，不够优雅）
+   3. GotCommandMsg将消息用json解析后，用if else比对，找到为空的[command](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/message.go#L102-L105)
+   4. 最终调到[localbackend.Start](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L125-L311)
+
+
+
+我们此时就基于[localbackend.Start](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L125-L311)开始看，看看他究竟做了什么，还是主要关注 peer, endpoint, netmap
+
+```go
+func (b *LocalBackend) Start(opts Options) error {
+	// ... 参数检查 ...
+	hi := controlclient.NewHostinfo()
+	hi.BackendLogID = b.backendLogID
+	hi.FrontendLogID = opts.FrontendLogID
+	// ... 对 LocalBackend 上锁 以及部分参数获取 ... 
+	hi.RoutableIPs = append(hi.RoutableIPs, b.prefs.AdvertiseRoutes...)
+	// ...各种参数初始化与DERP处理...
+    
+    // 初始化了一个controlclient
+	cli, err := controlclient.New(controlclient.Options{
+		Logf:            logger.WithPrefix(b.logf, "control: "),
+		Persist:         *persist,
+		ServerURL:       b.serverURL,
+		Hostinfo:        hi,
+		KeepAlive:       true,
+		NewDecompressor: b.newDecompressor,
+	})
+    // ... 
+
+	b.mu.Lock()
+	b.c = cli
+    // endpoints 
+	endpoints := b.endpoints
+	b.mu.Unlock()
+	
+	if endpoints != nil {
+		cli.UpdateEndpoints(0, endpoints)
+	}
+
+	cli.SetStatusFunc(func(newSt controlclient.Status) {
+        // ... 各种参数检查处理检查，当前仅是给StatusFunc赋值，不执行 ...
+	})
+
+	b.e.SetStatusCallback(func(s *wgengine.Status, err error) {
+        // 错误处理&参数赋值
+		b.endpoints = append([]string{}, s.LocalAddrs...)
+		b.mu.Unlock()
+
+		if c != nil {
+			c.UpdateEndpoints(0, s.LocalAddrs)
+		}
+		b.stateMachine()
+
+		b.statusLock.Lock()
+		b.statusChanged.Broadcast()
+		b.statusLock.Unlock()
+
+		b.send(Notify{Engine: &es})
+	})
+    // ... 
+	return nil
+}
+```
+
+在上面start中，我们没有找到非常明显的状态转换&&endpoint赋值，仅看到了在[b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298)中有两行与endpoints相关。一行为直接赋值，另一行则是给cli的endpoints赋值，不是我们直接想要的。
+
+又没头绪了...
+
+既然只有[b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298)给endpoints进行了赋值，同时我们知道该方法当前仅做注册，估计是用于后续状态切换时的回调操作，我们就一路跟踪，查找到在哪里进行调用的（由于代码比较复杂，全由状态或channel进行传递管理，此处跟踪代码可能不是非常详细准确，此部分不讲述实现逻辑，仅用来记录查找endpoints生成逻辑）：
+
+1. [Engine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/wgengine.go#L91-L137) 接口
+
+   - > *Engine is the Tailscale WireGuard engine interface.*
+
+2. 查找其具体实现，有[watchdog](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/watchdog.go#L69-L71)与[userspaceEngine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L424-L428)两个实现
+
+   - watchdog 看起来是一个错误处理或log的wrap层，本身调用了wrap中的具体实现。
+   - 那么就剩下[userspaceEngine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L424-L428)了
+
+3. [userspaceEngine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L424-L428) 给statusCallback赋值
+
+4. 其被[userspaceEngine.getStatusCallback()](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L430-L434) 传递出去（此处上锁）
+
+5. 在此处[userspaceEngine.RequestStatus](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L533-L565) 进行了处理
+
+   - 简单来说这里定义了一个reqCh，初始化为1，每次调用该请求时都尝试往reqCH中发送一个"信号值"，如果内部有值，则走default，不处理，若没值，则传递进入。（此处感觉实现有点小bug，但是在某些超多并发的情况下将会拦截掉部分请求。
+     - 我的建议是，不如尝试使用trylock，trylock失败代表里面正在执行，trylock成功则执行即可。（也可尝试`atomic.CompareAndSwapInt32`）
+
+6. 其先调用了[getStatus](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L437-L532)获取基础状态，后将获取的状态传入最开始的[b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298)
+
+7. 该getStatus将自己本身的endpoints甩了出去，但此处并没有初始化endpoints，所以我们查看该结构体的endpoints是如何被赋值的
+
+8. 在[newUserspaceEngineAdvanced](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L99-L224)的地方提供了赋值方法[endpointsFn](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L114-L120)被赋值、
+
+9. 其传递给了[magicsockOpts.EndpointsFunc](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L121-L124)参数，后续通过[endpointsFunc](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L151-L156)方法将其返回出去
+
+10. 在[magicsock.Listen](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L196)中被传递给[Conn.epFunc](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L50) 
+
+    - [Conn](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L44-L101) 在描述中是用来路由UDP包，并且管理endpoints列表的，它实现了wireguard/devices的绑定
+
+11. [Conn.epFunc](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L294) 最终在 [Conn.epUpdate](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L236-L297) 中被调用，
+
+    - Conn.epUpdate其描述为单独占用一个goroutine，直到传递进来的context.Context 被关闭，
+
+12. 
+
+
+
+
+
 
 
 -----
 
-### tailscaled 源码阅读其他方式
+### other: tailscaled 源码阅读其他方式
 
 想了想，直接放弃好像有点可惜，不看到他P2P的实现真的很苦恼，现在有几条路子：
 
