@@ -665,9 +665,13 @@ func (b *LocalBackend) Start(opts Options) error {
 }
 ```
 
+##### endpoint
+
 在上面start中，我们没有找到非常明显的状态转换&&endpoint赋值，仅看到了在[b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298)中有两行与endpoints相关。一行为直接赋值，另一行则是给cli的endpoints赋值，不是我们直接想要的。
 
 又没头绪了...
+
+###### 溯源 b.e.SetStatusCallback 调用具体位置
 
 既然只有[b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298)给endpoints进行了赋值，同时我们知道该方法当前仅做注册，估计是用于后续状态切换时的回调操作，我们就一路跟踪，查找到在哪里进行调用的（由于代码比较复杂，全由状态或channel进行传递管理，此处跟踪代码可能不是非常详细准确，此部分不讲述实现逻辑，仅用来记录查找endpoints生成逻辑）：
 
@@ -709,7 +713,7 @@ func (b *LocalBackend) Start(opts Options) error {
 
 
 
-##### updateNetInfo
+###### updateNetInfo
 
 [代码](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L299-L340)
 
@@ -724,7 +728,7 @@ func (b *LocalBackend) Start(opts Options) error {
 2. 创建一个ipv4的udp socket，端口随机，命名为[pc4Hair](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L173)
 3. 创建一个[startHairCheck](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L180-L185)方法，该方法使用pc4Hair给指定的udp4发包
    - 发c.hairTX
-4. 创建一个[add](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L196-L235)方法，接收参数`(server, ipPort string,  d time.Duration)`，看起来像是获取公网IP的
+4. 创建一个[add](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L196-L235)方法，接收参数`(server, ipPort string,  d time.Duration)`，看起来像是将映射的公网IP添加到Report返回值中
    - 在ipv4的情况下，且gotEP4为空时，调用startHairCheck（发送udp包检测）
      - 在为空的时候，使用pc4Hair，尝试自己给自己发包（可能是用于探通的），并且将gotEP4赋值。
      - 在不为空的时，比对ipPort与上次的gotEP4。若不一致，则标明 [Report.MappingVariesByDestIP = "true"](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L223)
@@ -763,9 +767,47 @@ func (b *LocalBackend) Start(opts Options) error {
 15. 此处包含[注释](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L338-L342)，大致意思是udp没打通的情况下，是否做测量tcp到DERP服务器的连接时间测试。
 16. 返回深度`ret.Clone()`
 
+-------
 
+上述就是updateNetInfo的全流程
 
+其实透过整个流程，我们可以看到几个关键方法，其余都不是很重要
 
+- [add](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L196-L235)：添加获取到的映射IP
+- [startHairCheck](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L180-L185)：给自己发包，看看能否收到
+- [reader](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L265-L287) 处理服务器返回的包，并以下面两种方式解析，
+  - 处理startHairCheck发过来的包
+  - 交给 初始化的 [s4 :=&stunner.Stunner](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L291-L297) ，调用[s.Recevie](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L284)处理
+- [s.Recevie](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L284)：处理传入的包，判断是否是我们发出的tx
+  - 若是则解析出映射的IP+Port，作为endpoint传入[s.onPacket](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L161-L174)处理
+  - 若不是则丢弃，不处理。
+- [s.onPacket](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L161-L174)：剔除掉need中已完成的server，并调用[add](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L196-L235) 添加获取到的映射IP
+- [s.sendPackets](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L262-L287)：给derp*服务器发送STUN包。
+  - 其中用于发包的链接为[Conn.pconn](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L190)
+  - 其在最开始的[magicsock.Listen](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L158-L227) 中初始化，[具体命令](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L218) 
+    - 若无具体配置，其实际链接通常是：`packetConn = net.ListenPacket("udp4", 0)`，也就是一个随机的UDP端口。
+
+------
+
+上述updateNetInfo已经看完了，并且也算是理解了，其在最开始启动时Listen一个随机端口，并通过上面的一系列方法与STUN交互，并确认是否能成功打洞，而得到一个netReport信息。
+
+然后调用[determineEndpoints](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L423-L481) 根据上面返回的 netReport 生成具体的ip+port端口（它将公网IPv4，公网IPv6，内网IPv4，内网IPv6，都生成到了[]string中）
+
+- 若内网IPv4为0.0.0.0，则遍历所有网卡，并将所有网卡添加进去（此处假设某台机子下有多个WAN口，以及若是两个P2P客户端在相同局域网的情况下）
+
+对比当前的endpoints与lastEndpoints是否一致
+
+不一致则调用我们心心念念的[溯源 b.e.SetStatusCallback 调用具体位置](#####溯源 b.e.SetStatusCallback 调用具体位置)方法，更新endpoints，也就是最终调用到了[endpointsFn](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L113-L119)，等待userspaceEngine 调用[Status](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L436-L531)
+
+最终通过[e.getStatusCallback()](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L560-L562)调回[b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298)设置的方法，实现LocalBackend的Endpoints更新！
+
+-----
+
+##### aa
+
+上面我们已经知道了endpoint是如何被获取的，并且将endpoint成功存入了LocalBackend
+
+接下来我们需要找如何与对端节点建立链接的。
 
 
 
