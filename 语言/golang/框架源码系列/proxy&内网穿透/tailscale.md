@@ -705,7 +705,71 @@ func (b *LocalBackend) Start(opts Options) error {
 
     - Conn.epUpdate其描述为单独占用一个goroutine，直到传递进来的context.Context 被关闭，
 
-12. 
+12. 当前猜测此部分就是获取endpoints的方法，所以从此处开始详细看
+
+
+
+##### updateNetInfo
+
+[代码](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L299-L340)
+
+他先在Conn结构体的stunReceiveFunc中存放了个处理STUNPacket的[方法](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L105-L121)，与stun关键字有关，后续可能会用到。此处先记录
+
+后续调用[GetReport](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L123-L345) 用于获取derp信息与公网ipv4与ipv6，我们这里主要看GetReport方法
+
+当前看代码逻辑会尽量省略ipv6部分，因感觉逻辑一致。当前方法是用于获取一个[report.Report](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L28-L40) 结构体，可能目标是用于打洞等相关操作。
+
+1. 调用`c.DERP.STUN4()`，获取一个字符串数组
+   - 其默认为 `derp1.tailscale.com:3478`，`derp2.tailscale.com:3478`，`derp3.tailscale.com:3478`，`derp4.tailscale.com:3478`
+2. 创建一个ipv4的udp socket，端口随机，命名为[pc4Hair](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L173)
+3. 创建一个[startHairCheck](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L180-L185)方法，该方法使用pc4Hair给指定的udp4发包
+   - 发c.hairTX
+4. 创建一个[add](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L196-L235)方法，接收参数`(server, ipPort string,  d time.Duration)`，看起来像是获取公网IP的
+   - 在ipv4的情况下，且gotEP4为空时，调用startHairCheck（发送udp包检测）
+     - 在为空的时候，使用pc4Hair，尝试自己给自己发包（可能是用于探通的），并且将gotEP4赋值。
+     - 在不为空的时，比对ipPort与上次的gotEP4。若不一致，则标明 [Report.MappingVariesByDestIP = "true"](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L223)
+5. 创建[STUNConn](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L77-L82)接口，看起来是便于处理udp的发包与收包的管理
+6. 通过[c.GetSTUNConn4](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L213) 调用到了最开始初始化Conn结构体时，初始化的[new(RebindingUDPConn)](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L190)
+   - [RebindingUDPConn](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L1422-L1427) 看注释，表当前结构体的socket可以被重新绑定，可能此地实际实现逻辑就是，先建立一个udp用于打洞，当打洞成功后，以迅雷不及掩耳之势将其切换成wireguard（我对这里实现的猜测，仅猜测）
+7. 使用c.GetStunConn4生成一个p.conn链接给pc4赋值
+8. 创建[reader](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L265-L287)方法，接收参数`(s *stunner.Stunner, pc STUNConn)`，看起来像是读取Stun服务器的返回值
+   - 从传入的 pc STUNConn 中读取数据
+   - 并使用传入的 s *stunner.Stunner接收传入的请求 [s.Recevie](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L284)
+9. 创建 [&stunner.Stunner](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L291-L297)命名 s4
+   - 此处endpoints为，4. 的add方法
+   - Send 为 6. && 7. 的 p.conn.WriteTo
+   - Server为 1. 所传入的字符串数字（derp1服务器地址）
+10. 使用errgroup.Group，开goroutine调用[s4.Run](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L133-L210)（因为还有s6.Run，可同步发出请求，但不是重点，所以上面忽略）
+    1. 开始[s4.Run](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L133-L210)
+    2. 初始化变量
+       1. 创建一个[map[serverStr]sender](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L158)，命名为need，用于处理接收信息
+       2. 创建一个 [channel struct{}](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L159)，命名为allDone，用于处理当len(need)==0时，告知父goroutine消息已经接收完毕
+    3. 创建[s.onPacket](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L161-L174) 在上面的reader的 [s.Recevie](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L284)中会有调用，
+       1. 其就做了一件事儿，使用传入的server，从need map中找到对应的sender
+       2. 调用sender.cancel（可能是触发后续的某个回调）
+       3. 删除map的 server元素
+       4. [s.Endpoint](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L170) 调用上面的add方法，传入server与endpoint
+       5. 其判断need map 是否被清空了，若是清空则[close(allDone)](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L171-L173)
+    4. 遍历所有s.Servers，并初始化对应的map
+    5. 遍历所有的need，并开携程 [s.sendPackets](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L187)
+       - [s.sendPackets](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/stunner/stunner.go#L262-L287) 就是将原先的server转为net.UDPAddr，并调用上面初始化 [&stunner.Stunner](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L291-L297) 传入的Send操作去发信
+    6. 等待所有服务器返回响应
+    7. 完成s4.Run
+11. 等待上述group完成
+12. 判断`ret.MappingVariesByDestIP == "false" &&  gotEP4 != ""`
+    - （判断条件与add相关，主要是判断ip与Port是否有发生变化，没发生变化则考虑可能是NAT1，可直接打通，下面就可以稍微等待一下[startHairCheck](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L180-L185)发的探测包）
+13. 等待`<-c.gotHairSTUN`的探测包，其在reader中的[`c.handleHairSTUN`](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L281-L283)触发，通过比对解析包后的tx是否是c.hairTX，得出请求是否是本机发出
+14. 若上述得到返回值则`ret.HairPinning.Set(true)`，否则为`ret.HairPinning.Set(false)`
+15. 此处包含[注释](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/netcheck/netcheck.go#L338-L342)，大致意思是udp没打通的情况下，是否做测量tcp到DERP服务器的连接时间测试。
+16. 返回深度`ret.Clone()`
+
+
+
+
+
+
+
+
 
 
 
