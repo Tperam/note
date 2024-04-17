@@ -986,3 +986,5 @@ err := c.direct.PollNetMap(ctx, -1, func(nm *NetworkMap) {
 或者也可以说是异步？
 
 这玩意接触的比较少，所以看起代码来非常吃力。
+
+还是喜欢frp那种简单粗暴的调用，两眼一睁就知道他要干什么了
