@@ -441,6 +441,25 @@ type Options struct {
 
 Start包揽了所有启动相关的操作，我们针对此进行阅读。
 
+
+
+-----
+
+### other: tailscaled 源码阅读其他方式
+
+想了想，直接放弃好像有点可惜，不看到他P2P的实现真的很苦恼，现在有几条路子：
+
+1. 直接debug打断点+tailscale运行看实际流程（要自己搭建各种测试环境）
+2. 看Blog有没有对代码的解释和说明，如果没有，那就看看他blog中对P2P实现的描述，假装自己已经读过源码
+3. 玩点骚的，根据命名，以及大致行为，猜测其可能的功能
+   - 比如我现在就有怀疑对象，他的LocalBackend应该是贯穿全局的结构体，各个地方都会修改它
+     - 它里面的netMap可能就是管理节点的
+     - peer什么的估计也是相关的
+
+
+
+
+
 -----
 
 ### tailscaled v0.96
@@ -803,34 +822,144 @@ func (b *LocalBackend) Start(opts Options) error {
 
 -----
 
-##### aa
-
 上面我们已经知道了endpoint是如何被获取的，并且将endpoint成功存入了LocalBackend
 
-接下来我们需要找如何与对端节点建立链接的。
+接下来我们需要找如何与对端节点建立链接的。。。
 
+嗯好，寄了。我又找不到想要的了...看来只能暴力点了。
 
-
-
-
-
-
-
-
-
+理论上来说，我们现在有了endpoints，这个endpoints会在某种情况发送给远程服务器，然后服务器将此endpoints发送给其他的peer。然后我们这边也会接收到其他的peer的相关信息，（类似：routing && publickey），所以我现在尝试从endpoints入手，
 
 -----
 
-### other: tailscaled 源码阅读其他方式
+##### direct
 
-想了想，直接放弃好像有点可惜，不看到他P2P的实现真的很苦恼，现在有几条路子：
+阴差阳错下，我找到了 [Client.UpdateEndpoints](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L289) 其也是更新endpoints的方法，刚好也在[b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298) 内，其更新了[Client.Direct](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/auto.go#L105) 的endpoints，并且根据注释的描述，其很大可能是与服务器沟通的操作
 
-1. 直接debug打断点+tailscale运行看实际流程（要自己搭建各种测试环境）
-2. 看Blog有没有对代码的解释和说明，如果没有，那就看看他blog中对P2P实现的描述，假装自己已经读过源码
-3. 玩点骚的，根据命名，以及大致行为，猜测其可能的功能
-   - 比如我现在就有怀疑对象，他的LocalBackend应该是贯穿全局的结构体，各个地方都会修改它
-     - 它里面的netMap可能就是管理节点的
-     - peer什么的估计也是相关的
+> direct  *Direct *// our interface to the server APIs*
+
+其在更新endpoint的时候比较了是否与之前的endpoint相冲突，若是有，则调用[c.cancelMapSafely](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/auto.go#L201-L235)。我的直觉告诉我，这步很重要，但现在看不懂。先忽略，既然是与服务器沟通，那肯定还有其他API，咱们先看看其他的。
+
+其提供了几个操作
+
+- TryLogout
+- WaitLoginURL
+- PollNetMap
+- SetHostinfo
+- SetNetInfo
+
+这几个操作中，看上去比较重要的是 PollNetMap && SetNetInfo。
+
+根据命名猜测，PollNetMap，是用来拉服务端的所有节点的。而SetNetInfo，感觉可能是将自身信息设置上去？
+
+先来尝试阅读一下PollNetMap
+
+###### PollNetMap
+
+
+
+运行该方法的名称叫[mapRoutine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/auto.go#L382-L480)，[调用部分](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/auto.go#L431-L462)如下，传入了一个callback方法，
+
+```go
+err := c.direct.PollNetMap(ctx, -1, func(nm *NetworkMap) {
+    c.mu.Lock()
+
+    select {
+        case <-c.newMapCh:
+        c.logf("mapRoutine: new map request during PollNetMap. canceling.\n")
+        c.cancelMapLocked()
+
+        // Don't emit this netmap; we're
+        // about to request a fresh one.
+        c.mu.Unlock()
+        return
+        default:
+        }
+
+    c.synced = true
+    c.inPollNetMap = true
+    if c.loggedIn {
+        c.state = stateSynchronized
+    }
+    exp := nm.Expiry
+    c.expiry = &exp
+    stillAuthed := c.loggedIn
+    state := c.state
+
+    c.mu.Unlock()
+
+    c.logf("mapRoutine: netmap received: %s\n", state)
+    if stillAuthed {
+        c.sendStatus("mapRoutine2", nil, "", nm)
+    }
+})
+```
+
+实际方法如下：[代码](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/direct.go#L433-L594)
+
+不出意外的，此处与服务器通信
+
+1. 生成request为：[tailcfg.MapRequest](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/tailcfg/tailcfg.go#L378-L393)
+
+   ```go
+   request := tailcfg.MapRequest{
+       Version:   4, 
+       KeepAlive: c.keepAlive, // 客户端是否需要keepAlive
+       NodeKey:   tailcfg.NodeKey(persist.PrivateNodeKey.Public()), // pubKey
+       Endpoints: ep, // 上面获取到的endpoints
+       Stream:    allowStream,
+       Hostinfo:  hostinfo,
+   }
+   ```
+
+2. 发出HTTP 请求 POST  "$serverURL/machine/$machinePubkey/map"
+
+   - 其中 serverURL 为传入值或默认值https://login.tailscale.com
+   - `machinePubkey = persist.PrivateMachineKey.Public().HexString()`
+
+3. 考虑res的body过于庞大，做了个超时动作，没仔细看 [代码](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/direct.go#L488-L512)
+
+4. 读取body
+
+   - 头4字节为body长度，第一次先读长度
+   - 第二次读取全部数据。
+
+5. 将body解析到[tailcfg.MapResponse](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/tailcfg/tailcfg.go#L395-L411)中，此处获取到几个重要数据
+
+   - 节点过期时间
+   - 本机节点
+   - 对端节点列表
+   - ACL操作（不重要，不算是本次学习目标）
+
+6. 将resp的数据加载到 [nm := NetworkMap](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L23-L48) 中，此刻我们获得了
+
+   - 本机节点信息
+     - 公钥
+     - 私钥
+     - 节点过期时间
+     - 地址
+     - 用户
+   - 对端节点信息
+   - ACL鉴权相关
+   - DNS
+
+7. 调用传入的cb，将nm传入
+
+8. 处理一些操作后（还没看懂），调用[c.sendStatus("mapRoutine2", nil, "", nm)](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/auto.go#L513-L556)
+
+   - 不出意外，c.sendStatus又是回调..
+   - 其调用了[Client.statusFunc](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/auto.go#L113)，也就是最初的[cli.SetStatusFunc](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L202-L269)方法。
+   - 其在做了一堆我看不懂的操作后，将其赋值给[b.netMapCache](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L235) 
+
+9. 结束PollNetMap
+
+上述操作中，其实忽略了一个结构体 [PacketFilter](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L36) 这个结构体看起来可能是后续routing的关键，内部保存了SrcIPs与DstPortsRange，结构体[Match](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/filter/match.go#L47-L50)。
+
+-----
+
+当前我们有了本机的endpoint + 对端节点的endpoint+pubkey，以及IP相关，此时此刻，就可以生成wireguard网卡（或更新），以及一些打洞操作，去访问对端的endpoint。但现在还是不是很清楚是怎么触发打洞操作的。
+
+
 
 
 
@@ -844,3 +973,16 @@ func (b *LocalBackend) Start(opts Options) error {
 
 ## 代码层级
 
+### tailscaled v0.96
+
+我觉得不管怎么样，先得捋一遍代码层级，知道其设计模式，才能更好的读新的代码。
+
+老代码部分看着感觉打洞操作很简单，仅是lan口+endpoint，并且不考虑ip变化的情况，好像不如frp的打洞尝试（当然frp打洞尝试也没看全，但其对应建议的方法是比较全的，NAT4主打一个碰运气）。
+
+当前理解到的，就是tailscale做了一堆的回调，挂了一堆的函数。这种方式可能类似状态机的实现？
+
+就经常是初始化时挂几个方法，然后balabala处理后来消息了，调用初始化挂的方法去执行。
+
+或者也可以说是异步？
+
+这玩意接触的比较少，所以看起代码来非常吃力。
