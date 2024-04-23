@@ -959,6 +959,495 @@ err := c.direct.PollNetMap(ctx, -1, func(nm *NetworkMap) {
 
 当前我们有了本机的endpoint + 对端节点的endpoint+pubkey，以及IP相关，此时此刻，就可以生成wireguard网卡（或更新），以及一些打洞操作，去访问对端的endpoint。但现在还是不是很清楚是怎么触发打洞操作的。
 
+-------
+
+##### 打洞操作
+
+既然已经知道，它通过一系列操作后会调用到`SetStatusFunc`，并在其中设置`b.netMapCache = newSt.NetMap`，
+
+netMap是[NetworkMap](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L23-L48)类型，其存放了对端节点的信息，我们根据这个信息，来看其对peers的调用操作，通过查找引用，我们可以看到，他在三个方法中被调用，我们分别来看
+
+- [Concise](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L76-L97)
+- [UserMap](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L107-L155)
+- [_WireGuardConfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L206-L290)
+
+我们深入进去后发现
+
+- [Concise](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L76-L97)，将其使用字符串拼接了起来后返回，外部通常用于比对两个netmap是否相等使用。
+  
+    > NetworkMap: self: $pubkey auth=$MachineStatus :$port $Address
+    >
+    > $peer_pubkey $user $endpoints
+  
+- [UserMap](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L107-L155)，暂未用到，但看大概意思是生成了一个可以通过用户名查找ip的map
+
+- [_WireGuardConfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L206-L290)，既然上述的用户都不是用于链接对端节点，那此处大概率就是用于连接对端节点了。
+
+  - 这里也是将其拼成字符串，不过与WireGuard的配置比较相像：
+
+    > [Interface]
+    >
+    > PrivateKey = xxxxxx
+    >
+    > Address = 192.168.0.1 , 100.1.1.1, 123.123.123.123
+    >
+    > ListenPort = 12345
+    >
+    > DNS = xxxxx
+    >
+    > [Peer]
+    >
+    > PublicKey =  xxxxx
+    >
+    > Endpoint = 192.168.0.1:12345,123.123.123.123:45573,192.168.88.1:12345
+    >
+    > AllowedIPs = 10.0.0.1/8
+    >
+    > [Peer]
+    >
+    > PublicKey =  xxxxx
+    >
+    > Endpoint = 192.168.73.1:12345,123.123.123.124:45576,192.168.88.1:12345
+    >
+    > AllowedIPs = 10.0.0.1/8
+    
+  - 后将其返回给上层[WGCfg](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L194-L197) 与 [WireGuardConfigOneEndpoint](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L199-L205)，其中[WireGuardConfigOneEndpoint](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L199-L205)未被调用（其描述为只使用一个Endpoint）。
+
+
+
+所以我们此处直接从WGCfg开始看，先看他里面具体实现，再看他上层调用
+
+
+
+###### 建立WireGuard网卡
+
+
+
+我们接着上述内容，代码 [WGCfg](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/netmap.go#L194-L197) 继续向下看
+
+```go
+func (nm *NetworkMap) WGCfg(uflags int, dnsOverride []wgcfg.IP) (*wgcfg.Config, error) {
+	s := nm._WireGuardConfig(uflags, dnsOverride, true)
+	return wgcfg.FromWgQuick(s, "tailscale")
+}
+```
+
+通过nm._WireGuardConfig，我们已经得到了一个WireGuard的超集配置（string类型）（比原定义的WireGuard要多）
+
+（由于没有找到对应的库链接，考虑可能删库，所以此处直接粘贴代码）
+
+```go
+func FromWgQuick(s string, name string) (*Config, error) {
+	if !TunnelNameIsValid(name) {
+		return nil, &ParseError{"Tunnel name is not valid", name}
+	}
+	lines := strings.Split(s, "\n")
+	parserState := notInASection
+	conf := Config{Name: name}
+	sawPrivateKey := false
+	var peer *Peer
+	for _, line := range lines {
+		pound := strings.IndexByte(line, '#')
+		if pound >= 0 {
+			line = line[:pound]
+		}
+		line = strings.TrimSpace(line)
+		lineLower := strings.ToLower(line)
+		if len(line) == 0 {
+			continue
+		}
+		if lineLower == "[interface]" {
+			conf.maybeAddPeer(peer)
+			parserState = inInterfaceSection
+			continue
+		}
+		if lineLower == "[peer]" {
+			conf.maybeAddPeer(peer)
+			peer = &Peer{}
+			parserState = inPeerSection
+			continue
+		}
+		if parserState == notInASection {
+			return nil, &ParseError{"Line must occur in a section", line}
+		}
+		equals := strings.IndexByte(line, '=')
+		if equals < 0 {
+			return nil, &ParseError{"Invalid config key is missing an equals separator", line}
+		}
+		key, val := strings.TrimSpace(lineLower[:equals]), strings.TrimSpace(line[equals+1:])
+		if len(val) == 0 {
+			return nil, &ParseError{"Key must have a value", line}
+		}
+		if parserState == inInterfaceSection {
+			switch key {
+			case "privatekey":
+				k, err := ParseKey(val)
+				if err != nil {
+					return nil, err
+				}
+				conf.PrivateKey = PrivateKey(*k)
+				sawPrivateKey = true
+			case "listenport":
+				p, err := parsePort(val)
+				if err != nil {
+					return nil, err
+				}
+				conf.ListenPort = p
+			case "mtu":
+				m, err := parseMTU(val)
+				if err != nil {
+					return nil, err
+				}
+				conf.MTU = m
+			case "address":
+				addresses, err := splitList(val)
+				if err != nil {
+					return nil, err
+				}
+				for _, address := range addresses {
+					a, err := ParseCIDR(address)
+					if err != nil {
+						return nil, err
+					}
+					conf.Addresses = append(conf.Addresses, *a)
+				}
+			case "dns":
+				addresses, err := splitList(val)
+				if err != nil {
+					return nil, err
+				}
+				for _, address := range addresses {
+					a := ParseIP(address)
+					if a == nil {
+						return nil, &ParseError{"Invalid IP address", address}
+					}
+					conf.DNS = append(conf.DNS, *a)
+				}
+			default:
+				return nil, &ParseError{"Invalid key for [Interface] section", key}
+			}
+		} else if parserState == inPeerSection {
+			switch key {
+			case "publickey":
+				k, err := ParseKey(val)
+				if err != nil {
+					return nil, err
+				}
+				peer.PublicKey = *k
+			case "presharedkey":
+				k, err := ParseKey(val)
+				if err != nil {
+					return nil, err
+				}
+				peer.PresharedKey = SymmetricKey(*k)
+			case "allowedips":
+				addresses, err := splitList(val)
+				if err != nil {
+					return nil, err
+				}
+				for _, address := range addresses {
+					a, err := ParseCIDR(address)
+					if err != nil {
+						return nil, err
+					}
+					peer.AllowedIPs = append(peer.AllowedIPs, *a)
+				}
+			case "persistentkeepalive":
+				p, err := parsePersistentKeepalive(val)
+				if err != nil {
+					return nil, err
+				}
+				peer.PersistentKeepalive = p
+			case "endpoint":
+				eps, err := parseEndpoints(val)
+				if err != nil {
+					return nil, err
+				}
+				peer.Endpoints = eps
+			default:
+				return nil, &ParseError{"Invalid key for [Peer] section", key}
+			}
+		}
+	}
+	conf.maybeAddPeer(peer)
+
+	if !sawPrivateKey {
+		return nil, &ParseError{"An interface must have a private key", "[none specified]"}
+	}
+	for _, p := range conf.Peers {
+		if p.PublicKey.IsZero() {
+			return nil, &ParseError{"All peers must have public keys", "[none specified]"}
+		}
+	}
+
+	return &conf, nil
+}
+```
+
+上述`wgcfg.FromWgQuick(s, "tailscale")` 操作，其实就是将我们生成的配置，转回一个他内部的配置，便于对方使用（这里可以理解为解耦，使用规定的配置与字符串解析减少两个项目的耦合度，此项目为tailscale开发的[wireguard-go](https://github.com/tailscale/wireguard-go/)。
+
+```go
+// Config is a wireguard configuration.
+type Config struct {
+	Name       string
+	PrivateKey PrivateKey
+	Addresses  []CIDR
+	ListenPort uint16
+	MTU        uint16
+	DNS        []IP
+	Peers      []Peer
+}
+type Peer struct {
+	PublicKey           Key
+	PresharedKey        SymmetricKey
+	AllowedIPs          []CIDR
+	Endpoints           []Endpoint
+	PersistentKeepalive uint16
+}
+type Endpoint struct {
+	Host string
+	Port uint16
+}
+```
+
+其实际上就是WireGuard网口的一个超集，主要就是endpoints多了个List。（可能也多了DNS，但我们主要关注endpoint）
+
+我们往回找，发现最终实际上是[LocalBackend.authReconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L593-L649) 调用了生成WireGuard配置的操作，并且具体配置交由[b.e.Reconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L644)处理
+
+其具体实现为[userspaceEngine.Reconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L299-L378)，该方法对原先配置进行更新，并且对比新老配置（判断其是否修改过）。
+
+后调用了[e.wgdev.Reconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L337)，重新配置网卡。
+
+该部分也是由tailscale实现，[wireguard-go](https://github.com/tailscale/wireguard-go/)，当时可能是没有开源，所以没有直接的git引用，此处简单略读一下：
+
+```go
+// Reconfig replaces the existing device configuration with cfg.
+func (device *Device) Reconfig(cfg *wgcfg.Config) (err error) {
+	defer func() {
+		if err != nil {
+			device.log.Debug.Printf("device.Reconfig: failed: %v", err)
+			device.RemoveAllPeers()
+		}
+	}()
+
+	// Remove any currentt peers not in the new configuration.
+	device.peers.RLock()
+	oldPeers := make(map[wgcfg.Key]bool)
+	for k := range device.peers.keyMap {
+		oldPeers[k] = true
+	}
+	device.peers.RUnlock()
+	for _, p := range cfg.Peers {
+		delete(oldPeers, p.PublicKey)
+	}
+	for k := range oldPeers {
+		device.log.Debug.Printf("device.Reconfig: removing old peer %s", k.ShortString())
+		device.RemovePeer(k)
+	}
+
+	device.staticIdentity.Lock()
+	curPrivKey := device.staticIdentity.privateKey
+	device.staticIdentity.Unlock()
+
+	if !curPrivKey.Equal(cfg.PrivateKey) {
+		device.log.Debug.Println("device.Reconfig: resetting private key")
+		if err := device.SetPrivateKey(cfg.PrivateKey); err != nil {
+			return err
+		}
+	}
+
+	device.net.Lock()
+	device.net.port = cfg.ListenPort
+	device.net.Unlock()
+
+	if err := device.BindUpdate(); err != nil {
+		return ErrPortInUse
+	}
+
+	// TODO(crawshaw): UAPI supports an fwmark field
+
+	newKeepalivePeers := make(map[wgcfg.Key]*Peer)
+	for _, p := range cfg.Peers {
+		peer := device.LookupPeer(p.PublicKey)
+		if peer == nil {
+			device.log.Debug.Printf("device.Reconfig: new peer %s", p.PublicKey.ShortString())
+			peer, err = device.NewPeer(p.PublicKey)
+			if err != nil {
+				return err
+			}
+			if p.PersistentKeepalive != 0 && device.isUp.Get() {
+				newKeepalivePeers[p.PublicKey] = peer
+			}
+		}
+
+		if !p.PresharedKey.IsZero() {
+			peer.handshake.mutex.Lock()
+			peer.handshake.presharedKey = p.PresharedKey
+			peer.handshake.mutex.Unlock()
+
+			device.log.Debug.Printf("device.Reconfig: setting preshared key for peer %s", p.PublicKey.ShortString())
+		}
+
+		peer.Lock()
+		peer.persistentKeepaliveInterval = p.PersistentKeepalive
+		if len(p.Endpoints) > 0 && (peer.endpoint == nil || !endpointsEqual(p.Endpoints, peer.endpoint.Addrs())) {
+			str := p.Endpoints[0].String()
+			for _, cfgEp := range p.Endpoints[1:] {
+				str += "," + cfgEp.String()
+			}
+			ep, err := device.createEndpoint(p.PublicKey, str)
+			if err != nil {
+				peer.Unlock()
+				return err
+			}
+			peer.endpoint = ep
+
+			// TODO(crawshaw): whether or not a new keepalive is necessary
+			// on changing the endpoint depends on the semantics of the
+			// CreateEndpoint func, which is not properly defined. Define it.
+			if p.PersistentKeepalive != 0 && device.isUp.Get() {
+				newKeepalivePeers[p.PublicKey] = peer
+
+				// Make sure the new handshake will get fired.
+				peer.handshake.mutex.Lock()
+				peer.handshake.lastSentHandshake = time.Now().Add(-RekeyTimeout)
+				peer.handshake.mutex.Unlock()
+			}
+		}
+		peer.Unlock()
+
+		device.allowedips.RemoveByPeer(peer)
+		for _, allowedIP := range p.AllowedIPs {
+			ones := uint(allowedIP.Mask)
+			ip := allowedIP.IP.IP()
+			if allowedIP.IP.Is4() {
+				ip = ip.To4()
+			}
+			device.allowedips.Insert(ip, ones, peer)
+		}
+	}
+
+	// Send immediate keepalive if we're turning it on and before it wasn't on.
+	for k, peer := range newKeepalivePeers {
+		device.log.Debug.Printf("device.Reconfig: sending keepalive to peer %s", k.ShortString())
+		peer.SendKeepalive()
+	}
+
+	return nil
+}
+```
+
+- 其占用了最初创建并且探测的端口 `device.net.port = cfg.ListenPort`，并尝试开启监听
+- 其创建了`map[wgcfg.Key]*Peer`，用于保存节点相关信息，其中包括对端节点的endpoints
+
+此处的endpoints作为重点排查，通过溯源发现，其直接就做调用了`err := peer.device.net.bind.Send(buffer, peer.endpoint)`
+
+其具体实现为：[Conn.Send](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L597-L640)
+
+- 简单来说，就是判断conn.Endpoint是什么类型的，若是单一地址，则直接发包并返回
+- 若是多地址，则遍历全部地址，并都发送
+
+所以此处并没有相对应的"打洞"操作，当前流程看下来，若是没有遗漏，则应该只支持NAT1打洞。
+
+
+
+
+
+
+
+
+
+
+
+-----
+
+
+
+Device结构体如下，其部分操作其实都在[newUserspaceEngineAdvanced](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L143-L177)下初始化
+
+```go
+type Device struct {
+	isUp           AtomicBool // device is (going) up
+	isClosed       AtomicBool // device is closed? (acting as guard)
+	log            *Logger
+	handshakeDone  func(peerKey wgcfg.Key, allowedIPs []net.IPNet)
+	skipBindUpdate bool
+	createBind     func(uport uint16, device *Device) (conn.Bind, uint16, error)
+	createEndpoint func(key [32]byte, s string) (conn.Endpoint, error)
+
+	filterLock sync.Mutex
+	filterIn   func(b []byte) FilterResult
+	filterOut  func(b []byte) FilterResult
+
+	// synchronized resources (locks acquired in order)
+
+	state struct {
+		starting sync.WaitGroup
+		stopping sync.WaitGroup
+		sync.Mutex
+		changing AtomicBool
+		current  bool
+	}
+
+	net struct {
+		starting sync.WaitGroup
+		stopping sync.WaitGroup
+		sync.RWMutex
+		bind          conn.Bind // bind interface
+		netlinkCancel *rwcancel.RWCancel
+		port          uint16 // listening port
+		fwmark        uint32 // mark value (0 = disabled)
+	}
+
+	staticIdentity struct {
+		sync.RWMutex
+		privateKey wgcfg.PrivateKey
+		publicKey  wgcfg.Key
+	}
+
+	peers struct {
+		sync.RWMutex
+		keyMap map[wgcfg.Key]*Peer
+	}
+
+	// unprotected / "self-synchronising resources"
+
+	allowedips    AllowedIPs
+	indexTable    IndexTable
+	cookieChecker CookieChecker
+
+	unexpectedip func(key *wgcfg.Key, ip wgcfg.IP)
+
+	rate struct {
+		underLoadUntil atomic.Value
+		limiter        ratelimiter.Ratelimiter
+	}
+
+	pool struct {
+		messageBufferPool        *sync.Pool
+		messageBufferReuseChan   chan *[MaxMessageSize]byte
+		inboundElementPool       *sync.Pool
+		inboundElementReuseChan  chan *QueueInboundElement
+		outboundElementPool      *sync.Pool
+		outboundElementReuseChan chan *QueueOutboundElement
+	}
+
+	queue struct {
+		encryption chan *QueueOutboundElement
+		decryption chan *QueueInboundElement
+		handshake  chan QueueHandshakeElement
+	}
+
+	signals struct {
+		stop chan struct{}
+	}
+
+	tun struct {
+		device tun.Device
+		mtu    int32
+	}
+}
+```
 
 
 
@@ -971,7 +1460,12 @@ err := c.direct.PollNetMap(ctx, -1, func(nm *NetworkMap) {
 
 
 
-## 代码层级
+
+
+
+
+
+## 梳理代码流程
 
 ### tailscaled v0.96
 
@@ -988,3 +1482,61 @@ err := c.direct.PollNetMap(ctx, -1, func(nm *NetworkMap) {
 这玩意接触的比较少，所以看起代码来非常吃力。
 
 还是喜欢frp那种简单粗暴的调用，两眼一睁就知道他要干什么了
+
+-----
+
+代码层级还是比较多的，我们先来尝试梳理几个结构体
+
+| 结构体                                                       | 作用                                                         |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| [LocalBackend](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L26-L58) | 整个后台的处理框架，此设计类似调停者，将多个杂七杂八的东西混合在一起<br>其存储了各种杂七杂八的东西，但具体的实现逻辑又不属于他<br>例如endpoints，netmap这种关键数据，他只做保存并传递给其他用户 |
+| [wgengine.Engine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/wgengine.go#L91-L137) | 应该算是核心操作，最后看到的Reconfig也是他<br>[Reconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L299-L378) 启动WireGuard协议的网口，根据netMap更新生成对应的配置<br>[SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298) 监听本地endpoints的配置更新，并回调[c.UpdateEndpoints](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L289) 方法 |
+| [controlclient.Client](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/auto.go#L103-L130) | 与服务器交互的操作，用于更新netMap<br/>当本地 wgengine 更新本地endpoints时，触发更新后触发[c.UpdateEndpoints](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L289) 方法，后经过一系列操作，回调到LocalBackend初始化的 [c.SetStatusFunc](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L202-L269) 更新netMap。<br>当netMap更新后，触发[b.stateMachine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L268) 更新状态，同时根据具体状态调用到了[b.authReconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L678) 操作<br>后调用到[wgengine.Engine.Reconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L299-L378) 操作，更新监听状态 |
+
+这么一看突然感觉好简单，主要就是各种回调绕的头疼。
+
+其核心内容：
+
+#### endpoint部分
+
+endpoint部分主要考虑获取部分，我们获取方式其实就是[updateNetInfo](######updateNetInfo)。
+
+简单来说就是创建 Conn（[userspaceEngine.magicConn.pconn](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/magicsock/magicsock.go#L47)）时去做NAT测试
+
+1. 使用该Conn往STUN（4个derp）服务器发包。
+2. 并设置相对应的 onPackage回调监听。
+   - 解析回包的ip+port信息
+     - 当前实现不考虑NAT4（ip或Port变动），若是NAT4则标记`MappingVariesByDestIP=true`
+   - 像第一个返回的ip+port发包，探测是否能通。
+
+并将本机监听的所有端口，与上层返回的第一个ip+port信息保留添加到endpoint中。
+
+#### 打洞操作
+
+打洞操作很简单，或者基本是没有打洞操作，当前看实现，感觉仅NAT1才能正常通信（暂时没看到与服务器的通信，后续可以看看与服务器通信的消息体，判断是否有打洞操作），其发包逻辑如下：
+
+1. 获取所有的节点信息（netMap）
+2. 建立WireGuard协议的虚拟网卡
+   - 此实现支持多endpoint
+3. WireGuard在发包时，遍历所有endpoint，并同时对这些数据发包
+
+实现是极其的简单，不知道后续是否有其他操作用来增强打洞。
+
+-----
+
+此处猜测，未来若是实现NAT2,3,4该如何实现。
+
+- 首先我们已经知道了与服务器通信的结构体`controlclient.Client`，后续看起是否有NAT包的通知
+- 例如告知服务器，我们即将对xxx节点发出请求，请对方节点也往我的endpoints发包。当打通后保留该链接。
+  - 不一定ok，得看Wireguard协议如何将发往该网卡的请求转发到对端endpoints上。
+  - （猜测）当前的WireGuard可能是将请求导到某个进程中，进程随机一个端口往对端endpoints发信，当触发Rekey操作时，再随机一个端口发信，实现不同链接的密码协商与无缝切换。
+    - 若是真是上述实现，那估计支持NAT2、NAT3协议十分困难，打通率就极低了。
+
+
+
+
+
+
+
+
+
