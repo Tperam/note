@@ -1538,5 +1538,64 @@ endpoint部分主要考虑获取部分，我们获取方式其实就是[updateNe
 
 
 
+-----
+
+## 新版本
+
+[新版本 git](https://github.com/tailscale/tailscale/tree/7c1d6e35a5863d58f3727af07dea0578fca87030)
+
+基于上述逻辑，我们快速看新版本实现，直接跳到 [b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/ipn/ipnlocal/local.go#L417) 
+
+可以看到，他封装到了 [b.setWgengineStatus](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/ipn/ipnlocal/local.go#L1478-L1517)中
+
+```go
+// setWgengineStatus is the callback by the wireguard engine whenever it posts a new status.
+// This updates the endpoints both in the backend and in the control client.
+func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
+	if err != nil {
+		b.logf("wgengine status error: %v", err)
+		b.broadcastStatusChanged()
+		return
+	}
+	if s == nil {
+		b.logf("[unexpected] non-error wgengine update with status=nil: %v", s)
+		b.broadcastStatusChanged()
+		return
+	}
+
+	b.mu.Lock()
+	if s.AsOf.Before(b.lastStatusTime) {
+		// Don't process a status update that is older than the one we have
+		// already processed. (corp#2579)
+		b.mu.Unlock()
+		return
+	}
+	b.lastStatusTime = s.AsOf
+	es := b.parseWgStatusLocked(s)
+	cc := b.cc
+	b.engineStatus = es
+	needUpdateEndpoints := !endpointsEqual(s.LocalAddrs, b.endpoints)
+	if needUpdateEndpoints {
+		b.endpoints = append([]tailcfg.Endpoint{}, s.LocalAddrs...)
+	}
+	b.mu.Unlock()
+
+	if cc != nil {
+		if needUpdateEndpoints {
+			cc.UpdateEndpoints(s.LocalAddrs)
+		}
+		b.stateMachine()
+	}
+	b.broadcastStatusChanged()
+	b.send(ipn.Notify{Engine: &es})
+}
+```
+
+其主体逻辑还是没有变，当触发更新后，调用 `cc.UpdateEndpoints(s.LocalAddrs)`
+
+调用cc(controlclient.Client) 的Direct去更新操作（此处拆分成了接口）
+
+
+
 
 
