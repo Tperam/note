@@ -1492,6 +1492,7 @@ type Device struct {
 | [LocalBackend](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L26-L58) | 整个后台的处理框架，此设计类似调停者，将多个杂七杂八的东西混合在一起<br>其存储了各种杂七杂八的东西，但具体的实现逻辑又不属于他<br>例如endpoints，netmap这种关键数据，他只做保存并传递给其他用户 |
 | [wgengine.Engine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/wgengine.go#L91-L137) | 应该算是核心操作，最后看到的Reconfig也是他<br>[Reconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L299-L378) 启动WireGuard协议的网口，根据netMap更新生成对应的配置<br>[SetStatusCallback](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L271-L298) 监听本地endpoints的配置更新，并回调[c.UpdateEndpoints](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L289) 方法 |
 | [controlclient.Client](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/control/controlclient/auto.go#L103-L130) | 与服务器交互的操作，用于更新netMap<br/>当本地 wgengine 更新本地endpoints时，触发更新后触发[c.UpdateEndpoints](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L289) 方法，后经过一系列操作，回调到LocalBackend初始化的 [c.SetStatusFunc](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L202-L269) 更新netMap。<br>当netMap更新后，触发[b.stateMachine](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L268) 更新状态，同时根据具体状态调用到了[b.authReconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/ipn/local.go#L678) 操作<br>后调用到[wgengine.Engine.Reconfig](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L299-L378) 操作，更新监听状态 |
+| [Direct]()                                                   | 在controlclient.Client中，与服务器通信的操作，最重要的地方是NetMap的获取，其创建NetMap并执行SetStatusFunc设置的方法，将NetMap同步出去。 |
 
 这么一看突然感觉好简单，主要就是各种回调绕的头疼。
 
@@ -1524,17 +1525,33 @@ endpoint部分主要考虑获取部分，我们获取方式其实就是[updateNe
 
 -----
 
-此处猜测，未来若是实现NAT2,3,4该如何实现。
+欸，等等，好像少看了个细节，忘记他是用什么链接给对端发信的，若是使用本机的endpoints给对端发信，那还是有可能实现的。
 
-- 首先我们已经知道了与服务器通信的结构体`controlclient.Client`，后续看起是否有NAT包的通知
-- 例如告知服务器，我们即将对xxx节点发出请求，请对方节点也往我的endpoints发包。当打通后保留该链接。
-  - 不一定ok，得看Wireguard协议如何将发往该网卡的请求转发到对端endpoints上。
-  - （猜测）当前的WireGuard可能是将请求导到某个进程中，进程随机一个端口往对端endpoints发信，当触发Rekey操作时，再随机一个端口发信，实现不同链接的密码协商与无缝切换。
-    - 若是真是上述实现，那估计支持NAT2、NAT3协议十分困难，打通率就极低了。
+好的，
 
+其具体实现如下：
 
+createBind 为创建[newUserspaceEngineAdvanced](https://github.com/tailscale/tailscale/blob/b364a871bfc0b8bbff7cdb4bdaf201ff731fee9d/wgengine/userspace.go#L174)时创建的，也就是那个开启监听的本地口子，
 
+```go
+CreateBind:     e.magicConn.CreateBind
+...
+netc.bind, netc.port, err = device.createBind(netc.port, device)
+...
+err := peer.device.net.bind.Send(buffer, peer.endpoint)
+```
 
+所以下面的设想都是不成立的：
+
+>  此处猜测，未来若是实现NAT2,3,4该如何实现。 
+>
+> - 首先我们已经知道了与服务器通信的结构体`controlclient.Client`，后续看起是否有NAT包的通知
+> - 例如告知服务器，我们即将对xxx节点发出请求，请对方节点也往我的endpoints发包。当打通后保留该链接。
+>   - 不一定ok，得看Wireguard协议如何将发往该网卡的请求转发到对端endpoints上。
+>   - （猜测）当前的WireGuard可能是将请求导到某个进程中，进程随机一个端口往对端endpoints发信，当触发Rekey操作时，再随机一个端口发信，实现不同链接的密码协商与无缝切换。
+>   - 若是真是上述实现，那估计支持NAT2、NAT3协议十分困难，打通率就极低了。
+
+其打洞操作将变得更加简单，但加密session的概念可能更难实现了（可能涉及udp端口复用，或者说是协议头中加了什么编号，每次加一轮询，根据协议头的内容去变化）
 
 
 
@@ -1543,6 +1560,8 @@ endpoint部分主要考虑获取部分，我们获取方式其实就是[updateNe
 ## 新版本
 
 [新版本 git](https://github.com/tailscale/tailscale/tree/7c1d6e35a5863d58f3727af07dea0578fca87030)
+
+### SetStatusCallback
 
 基于上述逻辑，我们快速看新版本实现，直接跳到 [b.e.SetStatusCallback](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/ipn/ipnlocal/local.go#L417) 
 
@@ -1591,11 +1610,51 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 }
 ```
 
+### 获取NetMap操作
+
 其主体逻辑还是没有变，当触发更新后，调用 `cc.UpdateEndpoints(s.LocalAddrs)`
 
-调用cc(controlclient.Client) 的Direct去更新操作（此处拆分成了接口）
+调用cc([controlclient.Client](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/client.go#L33-L83)) 去更新操作（此处拆分成了接口），其接口具体实现为[controlclient.Auto](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/auto.go#L113-L150)。
+
+具体调用为：[controlclient.Auto.UpdateEndpoints](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/auto.go#L660-L669)，在本地端口或映射端口改变时，将会往updateCh发送一条信息，对端收到信息后，调用[c.direct.SendUpdate(ctx)](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/auto.go#L85) 更新信息。
+
+这里面调用像服务器发起更新请求的改动还是蛮大的，[Direct.sendMapRequest](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/direct.go#L815-L1112)。
+
+其将resp丢给了[sess.HandleNonKeepAliveMapResponse](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/direct.go#L1104)处理
+
+他好像将netMap的更新操作命名为mapSession（比较合理），并且创建[mapSession](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/map.go#L98-L121)时，传入了一个名为[nu NetmapUpdater](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/direct.go#L183-L191)的结构体（估计是老版本SetStatusFunc的变种），命名看似更加合理了。（具体怎么找到mapSession的，是因为没看到其他地方有处理resp.Peer，所以往回溯源找到现在的流程）
+
+我们来看看[sess.HandleNonKeepAliveMapResponse](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/direct.go#L1104)做了些什么操作，他调用了[ms.updateStateFromResponse(resp)](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/map.go#L191) 将resp传入进去。
+
+其中调用[updatePeersStateFromResponse](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/map.go#L372-L498) 用于更新节点。
+
+此时resp与以前不同，当前拆分了多种节点[Peers](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/tailcfg/tailcfg.go#L1750-L1757)（添加或修改），[PeersChanged](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/tailcfg/tailcfg.go#L1758-L1762)，[PeersRemoved](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/tailcfg/tailcfg.go#L1763-L1764) 删除，并将其读到了[ms.Peers](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/map.go#L79)下。
+
+这里的代码还是定义了多种状态，但暂时不了解，先跳过。
+
+最后将所有数据从resp中读出，存到ms后生成对应的[ms.netmap()](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/map.go#L780-L831) 并调用 [ms.netmapUpdater.UpdateFullNetmap(nm)](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/map.go#L217) 更新具体的NetMap。
+
+#### updateFullNetMap
+
+具体实现为：[updateFullNetMap](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/auto.go#L422-L441)，其调用了[c.sendStatus](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/auto.go#L437) 并通过一个执行队列执行 [c.observer.SetControlClientStatus](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/control/controlclient/auto.go#L607) 避免阻塞，调用[LocalBackend.SetControlClientStatus](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/ipn/ipnlocal/local.go#L1017-L1265) 。
+
+这个方法还是和以前差不多，都是调用LocalBackend去更新，并且最后调用`b.stateMachine` 与 `b.authReconfig` 更新对应配置。
+
+-----
 
 
+
+### WireGuard
+
+现在在方法流程里还是能看到[Engine.Reconfig](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/ipn/ipnlocal/local.go#L3689)的身影，猜测WireGuard还是通过Reconfig重新配置。
+
+此处主要想看看发包操作是否还是那样简单粗暴，若是，估计还是只能NAT1访问，但迭代了这么多版应该不是很至于。
+
+所以我们可以关注一下这里，后续顺带回到Direct部分，看看与服务器的通信是否增加（例如主动访问服务器，让服务器给B客户端发送打洞消息此类），当然，也有可能是在每段时间的mapRoutine中执行了该操作（根据使用经验：此处大概率不会，现在第一次访问对端IP时，还是比较慢的，所以考虑没有实现创建NetMap时直接建立对应链接。）（并且根据同事反馈，不知道何种原因，会白嫖到别人的derp服务器）
+
+这里流程实现的非常复杂，又到了看不懂的时候了。。。
+
+只能像以前一样，暴力理解。
 
 
 
