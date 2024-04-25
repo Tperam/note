@@ -1656,5 +1656,19 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 
 只能像以前一样，暴力理解。
 
+#### 初始化 WGCfg
+
+当前的Reconfig操作，相比于以前，多了几个参数，同时原先的[wgcfg.Config](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/wgengine/wgcfg/config.go#L19-L34)的值也发生了改变。（其底下的[wcfg.Peer](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/wgengine/wgcfg/config.go#L36-L48)发生了变化，原先endpoint为一个[]string列表，当前有所修改（改成啥还不知道））
+
+我们回过头去看 [wgcfg.Config](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/wgengine/wgcfg/config.go#L19-L34) 是怎么生成的，以及是否有对endpoints的处理
+
+调用：[nmcfg.WGCfg](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/ipn/ipnlocal/local.go#L3574) ，具体实现：[WGCfg](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/wgengine/wgcfg/nmcfg/nmcfg.go#L54-L146)。
+
+其并没有对endpoints进行处理，仅读取对应peer的DiscoKey（不知道是啥）与PubKey，以及V4MasqAddr与V6MasqAddr。
+
+>  由于没找到endpoints，所以当前先溯源，找到曾经看到的send方法，看看他的addr是怎么获取到的。
+
+意外找到个[natConfigFromWGConfig](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L688)，里面读取了[peer.V4MasqAddr](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L730)，他将V4MasqAddr添加到了一个[listenAddrs](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L612) 中，
+
 
 
