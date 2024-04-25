@@ -1656,7 +1656,7 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 
 只能像以前一样，暴力理解。
 
-#### 初始化 WGCfg
+#### 初始化 WGCfg（略）
 
 当前的Reconfig操作，相比于以前，多了几个参数，同时原先的[wgcfg.Config](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/wgengine/wgcfg/config.go#L19-L34)的值也发生了改变。（其底下的[wcfg.Peer](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/wgengine/wgcfg/config.go#L36-L48)发生了变化，原先endpoint为一个[]string列表，当前有所修改（改成啥还不知道））
 
@@ -1668,7 +1668,48 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 
 >  由于没找到endpoints，所以当前先溯源，找到曾经看到的send方法，看看他的addr是怎么获取到的。
 
-意外找到个[natConfigFromWGConfig](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L688)，里面读取了[peer.V4MasqAddr](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L730)，他将V4MasqAddr添加到了一个[listenAddrs](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L612) 中，
+在[userspaceEngine.Reconfig](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/userspace.go#L830)中意外找到个[natConfigFromWGConfig](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L688)，里面读取了[peer.V4MasqAddr](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L730)，他将V4MasqAddr添加到了一个[listenAddrs](https://github.com/tailscale/tailscale/blob/7c1d6e35a5863d58f3727af07dea0578fca87030/net/tstun/wrap.go#L612) 中，并且命名是NAT。
+
+-----
 
 
+
+### endpoint
+
+上面着实看不懂逻辑啊。
+
+改思路，通过netmap的endpoints去反向索引，找到哪里有具体调用。
+
+通过反向索引，我们找到了[n.Endpoints](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/endpoint.go#L1365)，相比于其他调用的地方，此实现更加的可信（其他感觉都是打日志的，将endpoints拼接到string中处理的）
+
+代码中将Endpoint（此时是一个Set集合）传给了[endpoint.setEndpointsLocked](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/endpoint.go#L1368-L1409)方法，其逻辑如下
+
+1. 遍历SET
+2. 将endpoints添加到endpointState中
+
+上面逻辑非常简单，就是把各个节点通过STUN服务器探测的映射IP+内网IP添加到了一个叫endpointState的map中，这个map在[endpoint](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/endpoint.go#L49-L98)中被引用，以[map[netip.AddrPort]*endpointState](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/endpoint.go#L87) 的形式存储，根据代码搜索，endpoint看起来应该是直属于[peerInfo](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/peermap.go#L14-L23)，并且其被[peerMap](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/peermap.go#L36-L44)引用，又被[magicsock.Conn](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/magicsock.go#L253) 引用。
+
+此时我们得到一个引用关系：
+
+> magicsock.Conn -> peerMap->  peerInfo -> endpoint -> endpointState（endpoint）
+
+- [magicsock.Conn](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/magicsock.go#L81-L308)，WireGuard的链接管理。
+- [peerMap](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/peermap.go#L32-L44)，（管理多个节点，可以通过各种数据（publickey、nodeID、ip+port、discoKey）查到对应的peerInfo） 
+- [peerInfo](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/peermap.go#L14-L23)，单个peer的信息，存储endpoint，并且有一个反向索引到peerMap。
+- [endpoint](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/endpoint.go#L49-L98)，（endpoint的各种信息，这里应该是WireGuard定义的peer，里面存了publickey信息）
+- [endpointState](https://github.com/tailscale/tailscale/blob/da4e92bf0198115c9c5a02611831aeae67062aba/wgengine/magicsock/endpoint.go#L344-L373)，tailscale的WireGuard是支持多地址的，这里存放的就是每个对每个地址的Ping状态等。
+
+我们后续可以先从peerInfo与endpoint切入，看看其是否是我们上述理解的样子。
+
+> 根据当前看到的代码，其传给WGCfg是没有具体的连接地址的，好像只有Public key 、DiscoKey信息的。
+>
+> 所以我大胆假设，其在发信时挂的send操作：Wireguard是需要通过上述的key信息，来peerMap中查询具体的peerInfo后，获取其具体endpoint再往下走。
+>
+> 或是通过WGCfg中的peer.V4MasqAddr来发包，外部peerMap维护打洞端口，并时不时获取ping值，每次将延迟最低的置于peer.V4MasqAddr中。
+>
+> -----
+>
+> 甚至如果做的足够优雅（此处只考虑优雅，不考虑性能），每个peer的endpoint实际发往本机的某个udp端口，然后该udp端口为tailscale实现的一个监听，这个UDP是通过tailscale服务器与其他peer执行NAT打洞操作生成的，该UDP端口就负责给对端打通端口传数据。
+>
+> 这样就可以实现WireGuard与NAT穿透的解耦，WireGuard就做WireGuard的事，不会像现在一样WireGuard Cfg 改的连对端IP都没有（当然可能有，且其peer.V4MasqAddr 就是已经打通的NAT信息，WireGuard只需要负责发信。这种情况虽然实现也不错，但感觉可能对打通数据的切换，上锁那些要求更高（没细想，只是感觉侵入较大））。
 
