@@ -810,3 +810,13 @@ type Builder interface {
 
 
 
+
+
+#### [gorm.Scan](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/scan.go#L124-L360)
+
+扫表操作
+
+操作其实非常简单，如果是slice类型，且cap为0，它将初始化20容量的切片[reflect.MakeSlice](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/scan.go#L293)
+
+后续直接Append，没有做多于操作。
+
