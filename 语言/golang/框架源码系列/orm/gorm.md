@@ -22,15 +22,9 @@ go 主流的的orm框架。
   - 其中in实现
 - 以及Find、Scan等函数扫Array数据时，创建切片方式。（是直接创建并append，还是计算其具体容量。
 
-
-
 其封装实现如下：
 
-
-
-
-
-#### 
+### 事务流程
 
 
 
@@ -290,6 +284,8 @@ func (db *DB) Transaction(fc func(tx *DB) error, opts ...*sql.TxOptions) (err er
 
 -----
 
+### 一条基础查询语句的执行流程
+
 我们基于此语句往下看（最好直接Debug）
 
 ```go
@@ -401,7 +397,7 @@ func (stmt *Statement) BuildCondition(query interface{}, args ...interface{}) []
 
 #### [clause.Expression](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/clause/expression.go#L10-L13)
 
-这是一个接口，其内定义了一个Build方法，用于建造具体语句
+在上述代码中，我们看到了clause.Expression作为BuildCondition的返回值，这是一个接口，其内定义了一个Build方法，用于建造具体语句
 
 ```go
 // Expression expression interface
@@ -410,11 +406,15 @@ type Expression interface {
 }
 ```
 
-Builder的定义看起来较为复杂，暂时先往后放，回到[Where](####Where)函数
+![expression](E:\note\语言\golang\框架源码系列\orm\gorm.assets\expression.png)
+
+当前我们使用了其Expr作为实现。
 
 
 
-其调用[tx.Statement.AddClause](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/statement.go#L264-L275)，将结果保存
+Builder的定义可以暂时跳过，将在最终执行时使用。
+
+回到[Where](####Where)函数，其调用了[tx.Statement.AddClause](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/statement.go#L264-L275)，并将结果保存，若是曾经已有值，则合并。
 
 ```go
 func (stmt *Statement) AddClause(v clause.Interface) {
@@ -540,8 +540,6 @@ func initializeCallbacks(db *DB) *callbacks {
 
 #### [Execute](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/callbacks.go#L76-L154)
 
-
-
 ```go
 func (p *processor) Execute(db *DB) *DB {
 	// call scopes
@@ -633,9 +631,9 @@ func (p *processor) Execute(db *DB) *DB {
    - [AfterQuery](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/callbacks/query.go#L287-L303)
 4. 
 
+-----
 
-
-
+上述查询过程实际上已经完成，我们稍微详细扒一下
 
 #### [callbacks.Query](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/callbacks/query.go#L14-L30)
 
@@ -717,31 +715,19 @@ func (stmt *Statement) Build(clauses ...string) {
 
 每个[Clause](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/clause/clause.go#L3-L8)都实现了`Name()` `Build(Builder)` `MergeClause(*Clause)` 方法
 
-且每个查询都是一个[Statement](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/statement.go#L21-L50)，SQL的组成为[Clauses](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/statement.go#L30)。
-
-明日画图
-
-从Statement开始画，大致结构为：
-
-- Statement-> 多个Clause ; 每种特殊的查询，对应着不同processor，不同的processor又有不同的key对应着Clause。
-- 每个Where语句，又被解析成了不同的处理方式（有直接的string表达，有Name表达，有map的表达，等多个不同的表达方式）
+且每个查询都是一个[Statement](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/statement.go#L21-L50)，SQL是由多个[Clauses](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/statement.go#L30)所组成。
 
 
 
------
+#### [Where.Build && Where.BuildExprs](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/clause/where.go#L22-L89)
 
-#### [Statement.AddVar](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/statement.go#L169-L262)
-
-疑似IN操作，
-
-1. 处理多种传入类型，参数为"不定长参数"，循环开头，若是idx>0，则注入`,`。
-   - 若是传入的为数组，则在开头加个`(`，并将数组值拆分后再次调用当前函数，在结束后再加个`)`
+此处处理Where下的全部Expression，将其拼接（因支持OR，所以此处需要处理括号）
 
 
 
 #### [clause.Expr](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/clause/expression.go#L20-L76)
 
-我们看下此实现
+此实现是sql与参数切分，参数占位符由后续的[AddVar](####Statement.AddVar)实现
 
 ```go
 func (expr Expr) Build(builder Builder) {
@@ -795,6 +781,13 @@ func (expr Expr) Build(builder Builder) {
 }
 ```
 
+#### [Statement.AddVar](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/statement.go#L169-L262)
+
+处理占位符
+
+1. 处理多种传入类型，参数为"不定长参数"，循环开头，若是idx>0，则注入`,`。
+   - 若是传入的为数组，则在开头加个`(`，并将数组值拆分后再次调用当前函数，在结束后再加个`)`
+
 
 
 #### [clause.Builder](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/clause/clause.go#L18-L24)
@@ -808,6 +801,12 @@ type Builder interface {
 	AddError(error) error
 }
 ```
+
+
+
+最终，我们得到以下图，其查询流程如下：
+
+![gorm_statement](E:\note\语言\golang\框架源码系列\orm\gorm.assets\gorm_statement.png)
 
 
 

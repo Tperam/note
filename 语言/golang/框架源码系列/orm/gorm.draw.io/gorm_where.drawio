@@ -1,0 +1,39 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" version="24.7.6">
+  <diagram name="第 1 页" id="BuQoXNFwi2ERpF-7ZsmX">
+    <mxGraphModel dx="2074" dy="1140" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="9d1W8cLm6AWPzmFuf3ZS-1" target="9d1W8cLm6AWPzmFuf3ZS-4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-6" value="因上层.Table()已经调用并生成tx，因此，此处clone因为0，将不会产生调用" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="9d1W8cLm6AWPzmFuf3ZS-5">
+          <mxGeometry x="-0.1583" y="3" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-1" value="getInstance&lt;div&gt;不会创建一个新的链接&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="160" y="230" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-2" value="&lt;h1 style=&quot;margin-top: 0px;&quot;&gt;Where函数&lt;/h1&gt;&lt;div&gt;流程&lt;/div&gt;" style="text;html=1;whiteSpace=wrap;overflow=hidden;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="50" y="50" width="180" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="9d1W8cLm6AWPzmFuf3ZS-4" target="9d1W8cLm6AWPzmFuf3ZS-10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="9d1W8cLm6AWPzmFuf3ZS-4" target="9d1W8cLm6AWPzmFuf3ZS-12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-4" value="BuildCondition&lt;div&gt;解析传入的query与args&lt;/div&gt;&lt;div&gt;（string、map、struct&lt;span style=&quot;background-color: initial;&quot;&gt;）等&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="145" y="370" width="150" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-10" value="tx.Statement.AddClause&lt;div&gt;将其包为clause.Where&lt;br&gt;&lt;div&gt;将结果添加进Statement中&lt;/div&gt;&lt;/div&gt;&lt;div&gt;存入map中&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="145" y="510" width="150" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="9d1W8cLm6AWPzmFuf3ZS-12" value="BuildCondition&lt;div&gt;返回了一个[]clause.Expression&lt;/div&gt;&lt;div&gt;其具体实现为clause.Expr&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="390" y="365" width="170" height="70" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

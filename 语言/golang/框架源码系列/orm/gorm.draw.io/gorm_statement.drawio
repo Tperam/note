@@ -1,0 +1,176 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36" version="24.7.6">
+  <diagram name="第 1 页" id="aARTA7-8qAF-XOX27oFj">
+    <mxGraphModel dx="1803" dy="991" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-1" value="Statement" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=30;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="70" width="230" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-2" value="Table string" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" vertex="1" parent="SWmlgk5kwBPFwHf3vTj_-1">
+          <mxGeometry y="30" width="230" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-3" value="Clauses map[string]clause.Clause" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" vertex="1" parent="SWmlgk5kwBPFwHf3vTj_-1">
+          <mxGeometry y="60" width="230" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-4" value="SQL" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;rotatable=0;whiteSpace=wrap;html=1;" vertex="1" parent="SWmlgk5kwBPFwHf3vTj_-1">
+          <mxGeometry y="90" width="230" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-5" value="&lt;h1 style=&quot;margin-top: 0px;&quot;&gt;Statement&lt;/h1&gt;&lt;p&gt;每条查询都是独立的一个Statement&lt;/p&gt;&lt;p&gt;查询中所依赖的数据都在此结构体中&lt;/p&gt;" style="text;html=1;whiteSpace=wrap;overflow=hidden;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="90" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-80" value="Query内部为 processor&lt;div&gt;其callbacks中定义了多个processor&lt;/div&gt;&lt;div&gt;分别是&amp;nbsp;&lt;span style=&quot;background-color: initial;&quot;&gt;create&amp;nbsp;&lt;/span&gt;&lt;span style=&quot;background-color: initial;&quot;&gt;query update delete row raw&lt;/span&gt;&lt;/div&gt;&lt;div&gt;每个processor的Clauses都不同&lt;/div&gt;&lt;div&gt;例如 Query是SELECT FROM WHERE ORDER BY GROUP BY LIMIT FOR&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="72.5" y="920" width="450" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-89" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-86" target="SWmlgk5kwBPFwHf3vTj_-88">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-86" value="db" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="42.5" y="230" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-91" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-88" target="SWmlgk5kwBPFwHf3vTj_-90">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-95" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-88" target="SWmlgk5kwBPFwHf3vTj_-94">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-88" value=".Table" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="242.5" y="230" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-93" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-90" target="SWmlgk5kwBPFwHf3vTj_-92">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-102" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-90" target="SWmlgk5kwBPFwHf3vTj_-101">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-90" value=".Where" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="487.5" y="230" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-108" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-92" target="SWmlgk5kwBPFwHf3vTj_-107">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-92" value=".First" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="742.5" y="230" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-99" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-94" target="SWmlgk5kwBPFwHf3vTj_-98">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-94" value="getInstance&lt;div&gt;（产生新的db实例&lt;/div&gt;&lt;div&gt;或称为产生新的Statement）&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="222.5" y="370" width="160" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-100" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-98">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="402.5" y="260" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-98" value="Statment.Table&lt;div&gt;Statement.TableExpr&lt;br&gt;&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="232.5" y="510" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-104" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-101" target="SWmlgk5kwBPFwHf3vTj_-103">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-101" value="BuildCondition&lt;div&gt;构建、解析具体的Clause&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="472.5" y="370" width="150" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-106" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-103">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="642.5" y="260" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-103" value="Statement.AddClause&lt;div&gt;添加到Statement中&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="487.5" y="510" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-110" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-107" target="SWmlgk5kwBPFwHf3vTj_-109">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-107" value=".Limit(1)&lt;div&gt;限制输出&lt;/div&gt;&lt;div&gt;Statement.AddClause&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="732.5" y="370" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-112" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-109" target="SWmlgk5kwBPFwHf3vTj_-111">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-109" value="OrderBy&lt;div&gt;对主键进行排序&lt;/div&gt;&lt;div&gt;Statement.AddClause&lt;br&gt;&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="732.5" y="510" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-114" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-111" target="SWmlgk5kwBPFwHf3vTj_-113">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-111" value="Query&lt;div&gt;获取Query processor&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="742.5" y="650" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-116" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-113" target="SWmlgk5kwBPFwHf3vTj_-115">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-113" value=".Execute()" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="942.5" y="650" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-122" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-115" target="SWmlgk5kwBPFwHf3vTj_-121">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-115" value="执行Query processor的Query方法" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="942.5" y="790" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-117" value="Query processor在初始化时做过注册，代码：&lt;div&gt;https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/callbacks/callbacks.go#L22-L83&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="20" y="850" width="680" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-119" value="" style="endArrow=none;dashed=1;html=1;dashPattern=1 3;strokeWidth=2;rounded=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" edge="1" parent="1" target="SWmlgk5kwBPFwHf3vTj_-111">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="267.5" y="860" as="sourcePoint" />
+            <mxPoint x="522.5" y="1100" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-124" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-121" target="SWmlgk5kwBPFwHf3vTj_-123">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-121" value="BuildQuerySQL&lt;div&gt;创建SQL语句&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="942.5" y="930" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-126" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-123" target="SWmlgk5kwBPFwHf3vTj_-125">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-123" value="处理Select,Omit,传入结构体字段" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="942.5" y="1070" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-128" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-125" target="SWmlgk5kwBPFwHf3vTj_-127">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-125" value="处理连表字段&lt;div&gt;FROM Clause&lt;/div&gt;&lt;div&gt;此处考虑Join&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="942.5" y="1210" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-138" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-127" target="SWmlgk5kwBPFwHf3vTj_-137">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-127" value="Statement.Build&lt;div&gt;根据Query processor&lt;/div&gt;&lt;div&gt;的Clause&lt;span style=&quot;background-color: initial;&quot;&gt;构建具体语句&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: initial;&quot;&gt;轮询query.Clause，获取Key&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: initial;&quot;&gt;从Statement.Clauses中取&lt;/span&gt;&lt;/div&gt;&lt;div&gt;取出后调用.Build 方法&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="917.5" y="1354" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-129" value="" style="endArrow=none;dashed=1;html=1;dashPattern=1 3;strokeWidth=2;rounded=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-127" target="SWmlgk5kwBPFwHf3vTj_-80">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="612.5" y="1130" as="sourcePoint" />
+            <mxPoint x="662.5" y="1080" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-130" value="Statement.Clauses[&quot;WHERE&quot;]&lt;div&gt;如果原先已经存在值，此处将会进行MergeClause&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="465" y="600" width="175" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-131" value="" style="endArrow=none;dashed=1;html=1;dashPattern=1 3;strokeWidth=2;rounded=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;exitX=0.448;exitY=-0.067;exitDx=0;exitDy=0;exitPerimeter=0;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-130" target="SWmlgk5kwBPFwHf3vTj_-103">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="462.5" y="740" as="sourcePoint" />
+            <mxPoint x="512.5" y="690" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-135" value="调用最底层的Expr.Build进行语句的构建&lt;div&gt;并调用Statement.AddVar生成对应的占位符&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="891.88" y="1726" width="221.25" height="54.75" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-139" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="SWmlgk5kwBPFwHf3vTj_-137" target="SWmlgk5kwBPFwHf3vTj_-135">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-137" value="调用Where.Build构建&lt;div&gt;由于Where是同一类的集合，因此此处有对AND OR Expr NamedExpr 做处理&lt;/div&gt;&lt;div&gt;（决定加括号，或拆括号）&lt;/div&gt;" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="893.75" y="1539" width="217.5" height="91" as="geometry" />
+        </mxCell>
+        <mxCell id="SWmlgk5kwBPFwHf3vTj_-141" value="Statement本身还实现了Builder，用于构建语句" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;" vertex="1" parent="1">
+          <mxGeometry x="580" y="90" width="140" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
