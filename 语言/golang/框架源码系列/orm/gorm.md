@@ -115,7 +115,7 @@ type ConnPoolBeginner interface {
 
 如此，我们可以通过猜测得到图：
 
-![gorm.drawio](E:\note\语言\golang\框架源码系列\orm\gorm.assets\gorm.drawio.png)
+![gorm.drawio](\gorm.assets\gorm.drawio.png)
 
 
 
@@ -406,7 +406,7 @@ type Expression interface {
 }
 ```
 
-![expression](E:\note\语言\golang\框架源码系列\orm\gorm.assets\expression.png)
+![expression](gorm.assets\expression.png)
 
 当前我们使用了其Expr作为实现。
 
@@ -456,7 +456,7 @@ func (where Where) MergeClause(clause *Clause) {
 
 此时，Where方法结束。我们简单回顾一下：
 
-![gorm_where](E:\note\语言\golang\框架源码系列\orm\gorm.assets\gorm_where.png)
+![gorm_where](gorm.assets\gorm_where.png)
 
 -----
 
@@ -806,7 +806,7 @@ type Builder interface {
 
 最终，我们得到以下图，其查询流程如下：
 
-![gorm_statement](E:\note\语言\golang\框架源码系列\orm\gorm.assets\gorm_statement.png)
+![gorm_statement](gorm.assets\gorm_statement.png)
 
 
 
