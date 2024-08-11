@@ -820,3 +820,89 @@ type Builder interface {
 
 后续直接Append，没有做多于操作。
 
+
+
+### create 操作
+
+当前主要好奇几个点
+
+- 批量创建是怎么样的
+- last insert id 是怎么输出的
+
+#### [processor.Create](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/callbacks/create.go#L36-L201)
+
+既然我们已经知道了他的核心是processor处理，所以我们直接从此开始（外部的简单过了一遍，没有什么内容）
+
+其中做了一些简单的返回值判断（是否支持 RETURNING）等操作后，调用[ConvertToCreateValues](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/callbacks/create.go#L225-L396)生成插入
+
+此处做了将外部传入的Dest，转换为Schema
+
+#### [ConvertToCreateValues](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/callbacks/create.go#L225-L396)
+
+代码并不复杂，其返回值为[clause.Values](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/clause/values.go#L3-L6)
+
+```go
+type Values struct {
+	Columns []Column
+	Values  [][]interface{}
+}
+```
+
+其对最外部，传入的Dest进行判断，判断其类型
+
+```go
+switch value := stmt.Dest.(type) {
+	case map[string]interface{}:
+		values = ConvertMapToValuesForCreate(stmt, value)
+	case *map[string]interface{}:
+		values = ConvertMapToValuesForCreate(stmt, *value)
+	case []map[string]interface{}:
+		values = ConvertSliceOfMapToValuesForCreate(stmt, value)
+	case *[]map[string]interface{}:
+		values = ConvertSliceOfMapToValuesForCreate(stmt, *value)
+	default:
+    	// use reflect.
+    	// handle struct, slice, array
+    ...
+}
+```
+
+我们主要关注default分支，其slice的处理。
+
+其做了以下操作（有省略）
+
+1. 通过外层已经初始化的Schema，遍历读取其数据库字段名
+2. 判断每个字段是否有默认值，将没有默认值的字段单独列出，并推到[values.Column](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/clause/clause.go#L76-L82)中。
+3. 判断输入的反射类型（各种map、slice/arr、struct）
+   - 当前为slice
+4. 遍历dest的reflect值
+5. 遍历上层读取的`values.Columns`
+6. 从dest的reflect中取值，并丢入`values[i][idx]`，`i`是最外层的，表单个条数据，`idx`为每列数据（对应Column）
+   - 因此我们得出[clause.Values](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/clause/values.go#L3-L6)中Values的具体定义
+7. 在该轮循环中，再次遍历循环，将有默认值的字段在为空时填入对应值。
+8. 处理冲突条件，如果附带的Clauses有处理，则添加对应表达式。
+9. 此方法完结
+
+
+
+回到Create，调用Build建立语句（与Query几乎没啥区别，暂时跳过）
+
+我们接着往下看，看下RowsAffected是怎么实现的
+
+[关键代码](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/callbacks/create.go#L97-L199)
+
+1. 其执行语句后，获取了对应的RowsAffect，并判断是否为0（不为0才向下执行）
+2. 获取对应InsertID，若是err不为nil 或 id <= 0，则返回
+3. 获取Schema的主键字段名（此处应该是默认为id（当存在时），因为我们没有对其特殊标记）
+4. 继续根据dest类型，决定处理方式
+5. 数组处理时，判断其LastInsertID是否为反转（估计是某些数据库特性）
+   - 当前的MySQL5.7为正序，若是你一次插入多条数据，他的LastInsertID将会返回第一个插入的数据。
+6. 遍历Dest的所有数据，对PRIMARY KEY单步递增。
+
+
+
+完成对应操作
+
+-----
+
+#### 补充 Schema
