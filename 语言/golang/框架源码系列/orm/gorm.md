@@ -903,6 +903,62 @@ switch value := stmt.Dest.(type) {
 
 完成对应操作
 
------
+
+
+#### [CreateInBatches](https://github.com/go-gorm/gorm/blob/4a50b36f638c6899089e6e3457425528ce693933/finisher_api.go#L28-L70)
+
+批量创建
+
+代码非常简单
+
+```go
+func (db *DB) CreateInBatches(value interface{}, batchSize int) (tx *DB) {
+	reflectValue := reflect.Indirect(reflect.ValueOf(value))
+
+	switch reflectValue.Kind() {
+	case reflect.Slice, reflect.Array:
+		var rowsAffected int64
+		tx = db.getInstance()
+
+		// the reflection length judgment of the optimized value
+		reflectLen := reflectValue.Len()
+
+		callFc := func(tx *DB) error {
+			for i := 0; i < reflectLen; i += batchSize {
+				ends := i + batchSize
+				if ends > reflectLen {
+					ends = reflectLen
+				}
+
+				subtx := tx.getInstance()
+				subtx.Statement.Dest = reflectValue.Slice(i, ends).Interface()
+				subtx.callbacks.Create().Execute(subtx)
+				if subtx.Error != nil {
+					return subtx.Error
+				}
+				rowsAffected += subtx.RowsAffected
+			}
+			return nil
+		}
+
+		if tx.SkipDefaultTransaction || reflectLen <= batchSize {
+			tx.AddError(callFc(tx.Session(&Session{})))
+		} else {
+			tx.AddError(tx.Transaction(callFc))
+		}
+
+		tx.RowsAffected = rowsAffected
+	default:
+		tx = db.getInstance()
+		tx.Statement.Dest = value
+		tx = tx.callbacks.Create().Execute(tx)
+	}
+	return
+}
+```
+
+就是通过开事务，并进行数组切分，然后调用Create方法执行。
+
+
 
 #### 补充 Schema
