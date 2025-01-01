@@ -19,7 +19,7 @@ type Reader struct {
 
 此库提供了几个非常非常好用的方法
 
-偷窥，不会影响指针
+预览，不会影响指针
 
 ```go
 func (b *Reader) Peek(n int) ([]byte, error) {}
